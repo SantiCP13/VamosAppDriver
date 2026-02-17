@@ -1,8 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<!-- AGREGA ESTO SI TIENES PROBLEMAS DE PERMISOS -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/> 
+    <!-- Para Android 13+ (Opcional, la librería suele manejarlo) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="vamos_driver"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
+        
         <activity
             android:name=".MainActivity"
             android:exported="true"
