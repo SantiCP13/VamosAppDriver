@@ -1,23 +1,22 @@
-import 'dart:async';
 import 'package:latlong2/latlong.dart';
+// Importa el RouteService y su DTO
+import '../../maps/services/route_service.dart';
 
 class TripService {
-  // Solo lógica de cálculo de rutas (Google Directions / OSRM)
-  // La lógica de negocio (aceptar, rechazar, escuchar) se movió al Repository.
+  final RouteService _routeService;
 
+  // Inyección por constructor
+  TripService(this._routeService);
+
+  /// Obtiene la Polyline real entre dos puntos
   Future<List<LatLng>> getRoutePolyline(LatLng start, LatLng end) async {
-    // Simula latencia de red para calcular ruta
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    // Retornamos 3 puntos para simular una línea curva
-    // En producción esto conecta con Google Routes API o OSRM
-    return [
-      start,
-      LatLng(
-        (start.latitude + end.latitude) / 2,
-        (start.longitude + end.longitude) / 2 + 0.001,
-      ),
-      end,
-    ];
+    try {
+      // Llamamos al servicio real de OSRM (o Google)
+      final result = await _routeService.getRoute(start, end);
+      return result.points;
+    } catch (e) {
+      // Fallback simple en caso de error extremo: Línea recta
+      return [start, end];
+    }
   }
 }

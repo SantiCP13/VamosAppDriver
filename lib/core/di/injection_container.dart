@@ -1,35 +1,36 @@
 import 'package:get_it/get_it.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-// Importa tus Repositorios
+// Repositorios
 import '../../features/home/repositories/driver_repository.dart';
 import '../../features/home/repositories/driver_repository_impl.dart';
 import '../../features/home/repositories/trip_repository.dart';
 import '../../features/home/repositories/trip_repository_impl.dart';
 
-// Importa los Servicios que faltaban registrar
+// Servicios
 import '../services/storage_service.dart';
 import '../../features/home/services/location_service.dart';
 import '../../features/home/services/trip_service.dart';
+// IMPORTA TU ROUTE SERVICE (Asegúrate que la ruta sea correcta según tu árbol)
+import '../../features/maps/services/route_service.dart';
 
 final sl = GetIt.instance;
 
 Future<void> init() async {
   // ---------------------------------------------------
-  // 1. SERVICIOS (External & Core) - ¡ESTO FALTABA!
+  // 1. SERVICIOS (Core & External)
   // ---------------------------------------------------
-
-  // Registramos LocationService para que HomeProvider pueda encontrarlo
   sl.registerLazySingleton<LocationService>(() => LocationService());
-
-  // Registramos StorageService para guardar sesiones
   sl.registerLazySingleton<StorageService>(() => StorageService());
 
-  // Registramos TripService (el calculador de rutas)
-  sl.registerLazySingleton<TripService>(() => TripService());
+  // NUEVO: Registramos RouteService (La conexión a OSRM/Google)
+  sl.registerLazySingleton<RouteService>(() => RouteService());
+
+  // TripService ahora dependerá de RouteService, así que GetIt lo inyectará automáticamente
+  sl.registerLazySingleton<TripService>(() => TripService(sl()));
 
   // ---------------------------------------------------
-  // 2. REPOSITORIOS (Lógica de Negocio Switchable)
+  // 2. REPOSITORIOS
   // ---------------------------------------------------
   final isMock = dotenv.env['ENV_TYPE'] == 'MOCK';
 
