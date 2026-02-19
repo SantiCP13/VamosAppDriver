@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
-// Importamos ÚNICAMENTE del core
 import '../../../core/models/transaction_model.dart';
-import '../services/wallet_service.dart';
+import '../domain/repositories/wallet_repository.dart';
+import '../../../core/models/trip_model.dart';
 
 class WalletProvider extends ChangeNotifier {
-  final WalletService _service = WalletService();
+  final WalletRepository repository;
+
+  WalletProvider({required this.repository});
 
   double _balance = 0.0;
   List<TransactionModel> _transactions = [];
   bool _isLoading = false;
 
+  // NUEVO: Bandera para saber si ya cargamos los datos iniciales
+  bool _dataLoaded = false;
+
   double get balance => _balance;
   List<TransactionModel> get transactions => _transactions;
   bool get isLoading => _isLoading;
 
-  /// Calcula las ganancias de hoy (Getter calculado)
   double get todayEarnings {
     final now = DateTime.now();
     return _transactions
@@ -29,57 +33,44 @@ class WalletProvider extends ChangeNotifier {
   }
 
   Future<void> loadWalletData() async {
+    // CORRECCIÓN CRÍTICA:
+    // Si ya cargamos datos y tenemos transacciones en memoria, NO recargar del Mock.
+    // Esto evita que se borre el dinero que acabamos de ganar en el viaje.
+    if (_dataLoaded) return;
+
     _isLoading = true;
     notifyListeners();
 
     try {
-      _balance = await _service.getBalance();
-      _transactions = await _service.getHistory();
+      final results = await Future.wait([
+        repository.getBalance(),
+        repository.getHistory(),
+      ]);
+
+      _balance = results[0] as double;
+      _transactions = results[1] as List<TransactionModel>;
+      _dataLoaded = true; // Marcamos como cargado
     } catch (e) {
-      debugPrint("Error cargando wallet: $e");
+      debugPrint("Error loading wallet: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  // --- LÓGICA DE PAGOS ---
-  void processTripPayment(
-    double totalPrice,
-    String tripId,
-    String destination,
-  ) {
-    const double platformFeePercent = 0.15;
-    final double platformFee = totalPrice * platformFeePercent;
-    final double driverNetIncome = totalPrice - platformFee;
+  void registerCompletedTrip(Trip completedTrip) {
+    if (completedTrip.driverRevenue <= 0) {
+      debugPrint("⚠️ Advertencia: Viaje finalizado con ganancia 0 o nula.");
+    }
 
-    final incomeTx = TransactionModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      ledgerId: "ledger_${DateTime.now().microsecondsSinceEpoch}",
-      title: "Pago Viaje Finalizado",
-      description: "Destino: $destination",
-      date: DateTime.now(),
-      amount: totalPrice,
-      isCredit: true,
-      type: TransactionType.TRIP_PAYMENT,
-      referenceId: tripId,
-    );
+    // 1. En lugar de sumar mágicamente, forzamos la sincronización con Laravel
+    _dataLoaded = false;
 
-    _balance += driverNetIncome;
+    // 2. Descargamos el saldo real del Ledger
+    loadWalletData();
 
-    final displayTx = TransactionModel(
-      id: incomeTx.id,
-      ledgerId: incomeTx.ledgerId,
-      title: "Ganancia Viaje",
-      description: "Destino: $destination (Desc. 15% Fee)",
-      date: DateTime.now(),
-      amount: driverNetIncome,
-      isCredit: true,
-      type: TransactionType.TRIP_PAYMENT,
-      referenceId: tripId,
-    );
-
-    _transactions.insert(0, displayTx);
-    notifyListeners();
+    // Nota: Aunque loadWalletData recarga la lista desde el server,
+    // puedes dejar el SnackBar de la UI tranquilo, ya que ahora
+    // dependemos de la verdad absoluta del Backend.
   }
 }

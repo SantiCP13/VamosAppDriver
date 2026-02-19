@@ -48,12 +48,11 @@ class DriverAuthService {
     required String email,
     required String phone,
     required String password,
-    required String plate,
   }) async {
     await _apiClient.simulateDelay();
 
     if (_apiClient.isMockOnly) {
-      _currentUser = _mockRegister(name, email, plate);
+      _currentUser = _mockRegister(name, email);
       return _currentUser!;
     }
 
@@ -65,7 +64,6 @@ class DriverAuthService {
           'email': email,
           'phone': phone,
           'password': password,
-          'vehicle_plate': plate,
           'role': 'DRIVER',
         },
       );
@@ -77,7 +75,32 @@ class DriverAuthService {
     }
   }
 
-  // --- MÉTODOS DE PERFIL (SOLUCIONA ERRORES EN PROFILE SCREEN) ---
+  // --- PERFIL DE USUARIO ---
+
+  Future<String?> uploadProfileImage(String path) async {
+    await _apiClient.simulateDelay();
+
+    if (_apiClient.isMockOnly) {
+      debugPrint("MOCK UPLOAD PROFILE IMAGE: $path");
+      return "https://i.pravatar.cc/300?u=${DateTime.now().millisecondsSinceEpoch}";
+    }
+
+    try {
+      String fileName = path.split('/').last;
+      FormData formData = FormData.fromMap({
+        "image": await MultipartFile.fromFile(path, filename: fileName),
+      });
+
+      final response = await _apiClient.dio.post(
+        '/driver/profile/image',
+        data: formData,
+      );
+
+      return response.data['photo_url'];
+    } on DioException catch (e) {
+      throw Exception('Error subiendo imagen: ${e.message}');
+    }
+  }
 
   Future<bool> updateUserProfile({
     required String name,
@@ -86,18 +109,57 @@ class DriverAuthService {
     String? photoUrl,
   }) async {
     await _apiClient.simulateDelay();
-    // Lógica Mock o Real para actualizar
-    if (_currentUser != null) {
-      // En un caso real, harías PUT /user/profile
+
+    if (_apiClient.isMockOnly) {
+      if (_currentUser == null) return false;
+
+      // 1. Convertimos a mapa
+      final Map<String, dynamic> userData = _currentUser!.toMap();
+
+      // 2. Inyectamos los cambios
+      userData['name'] = name;
+      userData['phone'] = phone;
+      userData['email'] = email;
+      if (photoUrl != null) {
+        userData['photo_url'] = photoUrl;
+      }
+
+      // 3. Reconstruimos el usuario
+      _currentUser = User.fromMap(userData);
+
+      debugPrint("MOCK UPDATE PROFILE: ${_currentUser!.name}");
       return true;
     }
-    return false;
-  }
 
-  Future<String?> uploadProfileImage(String path) async {
-    await _apiClient.simulateDelay();
-    // Simula subida y retorno de URL
-    return "https://i.pravatar.cc/300?u=updated_${DateTime.now().millisecondsSinceEpoch}";
+    try {
+      // CORRECCIÓN DEL ERROR AQUÍ:
+      // Construimos el mapa fuera para evitar el lint "use_null_aware_elements" dentro del literal.
+      final Map<String, dynamic> updateData = {
+        'name': name,
+        'phone': phone,
+        'email': email,
+      };
+
+      if (photoUrl != null) {
+        updateData['photo_url'] = photoUrl;
+      }
+
+      final response = await _apiClient.dio.put(
+        '/driver/profile',
+        data: updateData,
+      );
+
+      // Actualizamos el usuario local con la respuesta real del servidor
+      if (response.data['user'] != null) {
+        _currentUser = User.fromMap(response.data['user']);
+        return true;
+      }
+      return false;
+    } on DioException catch (e) {
+      throw Exception(
+        e.response?.data['message'] ?? 'Error actualizando perfil',
+      );
+    }
   }
 
   // --- MÉTODOS DE DOCUMENTOS ---
@@ -105,20 +167,16 @@ class DriverAuthService {
   Future<void> uploadDocument(String docType, File file) async {
     await _apiClient.simulateDelay();
 
-    // MOCK: Si es solo mock, retornamos éxito inmediatamente.
-    // ESTO ES CLAVE: Evita que intente leer el archivo "fantasma" del emulador
     if (_apiClient.isMockOnly) {
-      debugPrint("MOCK UPLOAD: $docType - ${file.path}");
+      debugPrint("MOCK UPLOAD DOC: $docType - ${file.path}");
       return;
     }
 
-    // LÓGICA REAL (Para Laravel)
     try {
       String fileName = file.path.split('/').last;
 
       FormData formData = FormData.fromMap({
         "document_type": docType,
-        // Dio detecta automáticamente si es PDF o JPG
         "file": await MultipartFile.fromFile(file.path, filename: fileName),
       });
 
@@ -130,27 +188,37 @@ class DriverAuthService {
 
   Future<User> submitDocumentsForReview() async {
     await _apiClient.simulateDelay();
+
     if (_apiClient.isMockOnly) {
       if (_currentUser != null) {
-        _currentUser!.verificationStatus = UserVerificationStatus.UNDER_REVIEW;
+        final data = _currentUser!.toMap();
+        data['status'] = 'UNDER_REVIEW';
+        _currentUser = User.fromMap(data);
       }
       return _currentUser!;
     }
-    // Lógica real...
+
+    final response = await _apiClient.dio.post('/driver/submit-review');
+    _currentUser = User.fromMap(response.data['user']);
     return _currentUser!;
   }
 
   Future<UserVerificationStatus> checkStatus() async {
     await _apiClient.simulateDelay();
+
     if (_apiClient.isMockOnly) {
-      if (_currentUser?.verificationStatus ==
-          UserVerificationStatus.UNDER_REVIEW) {
-        _currentUser!.verificationStatus = UserVerificationStatus.VERIFIED;
+      return _currentUser?.verificationStatus ?? UserVerificationStatus.CREATED;
+    }
+
+    try {
+      final response = await _apiClient.dio.get('/driver/status');
+      if (response.data['user'] != null) {
+        _currentUser = User.fromMap(response.data['user']);
       }
       return _currentUser!.verificationStatus;
+    } catch (e) {
+      return _currentUser?.verificationStatus ?? UserVerificationStatus.CREATED;
     }
-    // Lógica real...
-    return _currentUser!.verificationStatus;
   }
 
   // --- HELPERS ---
@@ -165,14 +233,15 @@ class DriverAuthService {
   }
 
   // --- MOCKS ---
+
   User _mockLogin(String email, String password) {
     if (email.contains('ok')) {
       return User(
         id: 'driver-ok',
         email: email,
-        name: 'Juan Verificado',
+        name: 'Conductor Verificado',
         phone: '3001',
-        role: UserRole.NATURAL,
+        role: UserRole.DRIVER,
         verificationStatus: UserVerificationStatus.VERIFIED,
         beneficiaries: [],
         appMode: AppMode.PERSONAL,
@@ -182,9 +251,9 @@ class DriverAuthService {
       return User(
         id: 'driver-wait',
         email: email,
-        name: 'Pedro Esperando',
+        name: 'Conductor En Espera',
         phone: '3002',
-        role: UserRole.NATURAL,
+        role: UserRole.DRIVER,
         verificationStatus: UserVerificationStatus.UNDER_REVIEW,
         beneficiaries: [],
         appMode: AppMode.PERSONAL,
@@ -193,22 +262,22 @@ class DriverAuthService {
     return User(
       id: 'driver-new',
       email: email,
-      name: 'Carlos Nuevo',
+      name: 'Conductor Nuevo',
       phone: '3003',
-      role: UserRole.NATURAL,
+      role: UserRole.DRIVER,
       verificationStatus: UserVerificationStatus.CREATED,
       beneficiaries: [],
       appMode: AppMode.PERSONAL,
     );
   }
 
-  User _mockRegister(String name, String email, String plate) {
+  User _mockRegister(String name, String email) {
     return User(
-      id: 'new-driver-000',
+      id: 'new-driver-${DateTime.now().millisecondsSinceEpoch}',
       email: email,
       name: name,
       phone: '3000',
-      role: UserRole.NATURAL,
+      role: UserRole.DRIVER,
       verificationStatus: UserVerificationStatus.CREATED,
       beneficiaries: [],
     );

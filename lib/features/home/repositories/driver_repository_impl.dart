@@ -1,17 +1,15 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
 import '../../../core/models/document_model.dart';
+import '../../../core/models/vehicle_model.dart';
 import '../../../core/network/api_client.dart';
 import 'driver_repository.dart';
 
-// --- MOCK (Para desarrollo y pruebas de bloqueo) ---
+// --- MOCK ---
 class MockDriverRepository implements DriverRepository {
   @override
   Future<List<DriverDocument>> getDocuments(String driverId) async {
-    await Future.delayed(const Duration(seconds: 1)); // Simula red
-
-    // CAMBIA ESTAS FECHAS PARA PROBAR EL BLOQUEO:
-    // Si pones 'days: -1', el documento estará vencido.
+    await Future.delayed(const Duration(milliseconds: 500));
     return [
       DriverDocument(
         id: '1',
@@ -21,7 +19,7 @@ class MockDriverRepository implements DriverRepository {
       ),
       DriverDocument(
         id: '2',
-        name: 'Tecnomecánica',
+        name: 'Licencia de Conducción',
         expirationDate: DateTime.now().add(const Duration(days: 15)),
         status: 'VIGENTE',
       ),
@@ -29,69 +27,101 @@ class MockDriverRepository implements DriverRepository {
   }
 
   @override
+  Future<List<Vehicle>> getAssignedVehicles(String driverId) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    // Retornamos la lista estática del modelo para probar
+    return Vehicle.getMocks();
+  }
+
+  @override
   Future<bool> toggleStatus({
     required bool isOnline,
     required String driverId,
+    String? vehicleId,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 800));
+    await Future.delayed(const Duration(milliseconds: 1000));
 
-    // Si quiere desconectarse, siempre puede hacerlo.
-    if (!isOnline) return true;
+    if (!isOnline) return true; // Desconectar siempre es gratis
 
-    // Si quiere conectarse (ONLINE), validamos reglas de negocio:
-    final docs = await getDocuments(driverId);
-
-    // Regla: Ningún documento puede estar vencido o rechazado
-    final hasInvalidDocs = docs.any((doc) => !doc.isValid);
-
-    if (hasInvalidDocs) {
-      // Buscamos cuál falló para dar un mensaje claro
-      final badDoc = docs.firstWhere((doc) => !doc.isValid);
-      throw Exception(
-        "No puedes operar. Tu ${badDoc.name} está vencido o pendiente.",
-      );
+    // VALIDACIÓN DE NEGOCIO CRÍTICA
+    if (vehicleId == null) {
+      throw Exception("Debes seleccionar un vehículo para operar legalmente.");
     }
 
-    return true; // Todo en orden, pase
+    // Simulamos validación de documentos
+    final docs = await getDocuments(driverId);
+    if (docs.any((d) => !d.isValid)) {
+      throw Exception("Documentación vencida. No se puede generar FUEC.");
+    }
+
+    return true;
   }
 }
 
-// --- REAL (Conexión Laravel) ---
+// --- REAL (LARAVEL) ---
 class ApiDriverRepository implements DriverRepository {
   final ApiClient _apiClient = ApiClient();
 
   @override
   Future<List<DriverDocument>> getDocuments(String driverId) async {
-    try {
-      final response = await _apiClient.dio.get('/drivers/$driverId/documents');
-      return (response.data['data'] as List)
-          .map((e) => DriverDocument.fromJson(e))
-          .toList();
-    } catch (e) {
-      throw Exception("Error obteniendo documentos: $e");
-    }
+    final response = await _apiClient.dio.get('/drivers/$driverId/documents');
+    return (response.data['data'] as List)
+        .map((e) => DriverDocument.fromJson(e))
+        .toList();
+  }
+
+  @override
+  Future<List<Vehicle>> getAssignedVehicles(String driverId) async {
+    // Endpoint sugerido: GET /api/drivers/{id}/vehicles
+    final response = await _apiClient.dio.get('/drivers/$driverId/vehicles');
+    return (response.data['data'] as List)
+        .map((e) => Vehicle.fromJson(e))
+        .toList();
   }
 
   @override
   Future<bool> toggleStatus({
     required bool isOnline,
     required String driverId,
+    String? vehicleId,
   }) async {
     try {
-      // El Backend (Laravel) ejecutará middleware de validación
+      // Enviamos el vehicle_id al backend para que asocie la sesión
       await _apiClient.dio.patch(
         '/drivers/$driverId/status',
-        data: {'online': isOnline},
+        data: {
+          'online': isOnline,
+          'vehicle_id':
+              vehicleId, // Laravel validará si este vehículo tiene tarjeta de operación vigente
+        },
       );
       return true;
     } on DioException catch (e) {
-      // Manejo de error específico del Backend (403 Forbidden)
-      if (e.response?.statusCode == 403) {
-        // Ejemplo de respuesta Laravel: { "message": "Tu SOAT ha vencido." }
-        final msg = e.response?.data['message'] ?? "Requisitos incumplidos.";
+      if (e.response?.statusCode == 403 || e.response?.statusCode == 422) {
+        final data = e.response?.data;
+
+        // 1. Intentar leer el arreglo de "errors" de Laravel (ej. errors: { soat: })
+        if (data is Map && data.containsKey('errors')) {
+          final Map errors = data;
+          if (errors.isNotEmpty) {
+            final firstError = errors.values.first;
+            final errorMessage = firstError is List
+                ? firstError.first
+                : firstError.toString();
+            throw Exception(errorMessage);
+          }
+        }
+
+        // 2. Si no hay "errors", intentar leer un "message" directo, o poner el texto por defecto
+        final String msg = (data is Map && data.containsKey('message'))
+            ? data
+                  .toString() // <--- AQUÍ ESTÁ LA CORRECCIÓN
+            : "Error de validación legal (FUEC).";
+
         throw Exception(msg);
       }
-      throw Exception("Error de conexión con el servidor.");
+
+      throw Exception("Error de conexión: ${e.message}");
     }
   }
 }

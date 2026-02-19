@@ -3,12 +3,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
-// Imports Core
+// Imports Core & Models
 import '../../../core/models/trip_model.dart';
 import '../providers/home_provider.dart';
 
 // Widgets
 import '../widgets/trip_request_sheet.dart';
+import '../widgets/trip_panel_sheet.dart'; // <--- NUEVO IMPORT
 import '../widgets/side_menu.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -25,9 +26,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Inicializamos la ubicación UNA sola vez al arrancar
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<HomeProvider>().initLocation();
+      final provider = context.read<HomeProvider>();
+      provider.initLocation();
+      provider.loadVehicles();
     });
   }
 
@@ -117,12 +119,13 @@ class _HomeScreenState extends State<HomeScreen> {
           // --------------------------
           // 2. BOTÓN MENÚ (Hamburguesa)
           // --------------------------
+          // Solo visible si no hay viaje activo para no saturar la pantalla
           if (trip == null)
             Positioned(
               top: 50,
               left: 20,
               child: Container(
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
                   boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8)],
@@ -180,20 +183,25 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
           // --------------------------
-          // 4. PANELES INFERIORES (La clave del problema)
+          // 4. PANELES INFERIORES (MODIFICADO)
           // --------------------------
-          Align(
-            alignment: Alignment.bottomCenter,
-            // Aquí decidimos qué panel mostrar según el estado
+          // Usamos Positioned para asegurar que se fije al fondo
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
             child: _buildPanelContent(context, provider),
           ),
 
           // --------------------------
           // 5. BOTÓN RE-CENTRAR
           // --------------------------
+          // Ajustamos dinámicamente la posición del botón según si hay panel o no
           Positioned(
             right: 20,
-            bottom: 300, // Lo subimos para que no estorbe al panel
+            // Si hay viaje activo, el panel es más alto, subimos el botón.
+            // Si no, lo dejamos en 300 o ajustamos según el panel de "Go Online".
+            bottom: trip != null ? 350 : 280,
             child: FloatingActionButton(
               mini: true,
               backgroundColor: Colors.white,
@@ -212,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Selector inteligente de paneles inferiores
   Widget _buildPanelContent(BuildContext context, HomeProvider provider) {
-    // CASO 1: HAY UNA OFERTA DE VIAJE ENTRANTE
+    // CASO 1: OFERTA ENTRANTE
     if (provider.incomingTrip != null) {
       return TripRequestSheet(
         trip: provider.incomingTrip!,
@@ -221,21 +229,18 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    // CASO 2: HAY UN VIAJE EN CURSO
+    // CASO 2: VIAJE EN CURSO (AQUÍ ESTÁ EL CAMBIO CLAVE)
     if (provider.activeTrip != null) {
-      return _TripActiveSheet(
-        trip: provider.activeTrip!,
-        onActionPressed: () => provider.handleTripAction(context),
-      );
+      // Reemplazamos el widget antiguo por el nuevo TripPanelSheet
+      // No necesitamos pasar argumentos porque TripPanelSheet usa Provider internamente.
+      return const TripPanelSheet();
     }
 
-    // CASO 3: ESTADO STANDBY (Botón Conectar)
+    // CASO 3: STANDBY / OFFLINE
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
-      margin: const EdgeInsets.all(
-        16,
-      ), // Un poco de margen flotante se ve mejor
+      margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
@@ -250,26 +255,44 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Selector de Vehículo (Obligatorio por FUEC)
+          if (!provider.isOnline) _VehicleSelector(provider: provider),
+
           if (provider.isOnline)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 15),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+            Padding(
+              padding: const EdgeInsets.only(bottom: 15),
+              child: Column(
                 children: [
-                  SizedBox(
-                    width: 15,
-                    height: 15,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 15,
+                        height: 15,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 10),
+                      Text(
+                        "Buscando servicios...",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
                   ),
-                  SizedBox(width: 10),
+                  const SizedBox(height: 5),
                   Text(
-                    "Buscando servicios...",
-                    style: TextStyle(color: Colors.grey),
+                    "Operando: ${provider.selectedVehicle?.fullName ?? '...'}",
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ],
               ),
             ),
 
+          const SizedBox(height: 10),
+
+          // BOTÓN PRINCIPAL (GO ONLINE)
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -277,16 +300,13 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: provider.isLoading
                   ? null
                   : () async {
-                      // 1. Llamamos a la función y capturamos el posible error
                       final errorMsg = await provider.toggleOnlineStatus();
-
-                      // 2. Si 'errorMsg' tiene texto (no es null), mostramos la alerta
                       if (errorMsg != null && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(errorMsg),
                             backgroundColor: Colors.red,
-                            duration: const Duration(seconds: 4),
+                            behavior: SnackBarBehavior.floating,
                           ),
                         );
                       }
@@ -294,7 +314,9 @@ class _HomeScreenState extends State<HomeScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: provider.isOnline
                     ? Colors.redAccent
-                    : Colors.black,
+                    : (provider.selectedVehicle == null
+                          ? Colors.grey
+                          : Colors.black),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -324,153 +346,115 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ... (Tu clase _TripActiveSheet PUEDES PEGARLA AQUÍ ABAJO IGUAL QUE ANTES)
-class _TripActiveSheet extends StatelessWidget {
-  final Trip trip;
-  final VoidCallback onActionPressed;
+// Widget auxiliar para selección de vehículos (Se mantiene igual)
+class _VehicleSelector extends StatelessWidget {
+  final HomeProvider provider;
 
-  const _TripActiveSheet({required this.trip, required this.onActionPressed});
+  const _VehicleSelector({required this.provider});
+
+  void _showSelectionModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Selecciona tu vehículo",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "Para generar el FUEC legal, necesitamos saber qué vehículo conduces hoy.",
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+              const Divider(),
+              if (provider.myVehicles.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Center(child: Text("No tienes vehículos asignados.")),
+                )
+              else
+                ...provider.myVehicles.map((vehicle) {
+                  final isSelected = provider.selectedVehicle?.id == vehicle.id;
+                  return ListTile(
+                    leading: Icon(
+                      Icons.directions_car,
+                      color: isSelected ? Colors.black : Colors.grey,
+                    ),
+                    title: Text(
+                      vehicle.plate,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      "${vehicle.brand} ${vehicle.model} - ${vehicle.color}",
+                    ),
+                    trailing: isSelected
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null,
+                    onTap: () {
+                      provider.selectVehicle(vehicle);
+                      Navigator.pop(ctx);
+                    },
+                  );
+                }),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    String title = "";
-    String buttonText = "";
-    Color color = Colors.blue;
-    String addressToShow = "";
-
-    switch (trip.status) {
-      case TripStatus.ACCEPTED:
-        title = "Recogiendo a ${trip.passengerName}";
-        buttonText = "LLEGUÉ AL SITIO";
-        color = Colors.orange;
-        addressToShow = trip.originAddress;
-        break;
-      case TripStatus.ARRIVED:
-        title = "Esperando al pasajero";
-        buttonText = "INICIAR CARRERA";
-        color = Colors.purple;
-        addressToShow = trip.originAddress;
-        break;
-      case TripStatus.STARTED:
-        title = "En ruta al destino";
-        buttonText = "FINALIZAR VIAJE";
-        color = Colors.green;
-        addressToShow = trip.destinationAddress;
-        break;
-      default:
-        title = "Finalizando...";
-        buttonText = "CERRAR";
-        addressToShow = "";
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 10,
-            offset: Offset(0, -5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(5),
-            ),
-            child: Text(
-              title.toUpperCase(),
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-          ),
-          const SizedBox(height: 15),
-          Row(
-            children: [
-              Icon(Icons.location_on, color: Colors.grey[700], size: 28),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      trip.status == TripStatus.STARTED
-                          ? "Destino:"
-                          : "Recogida:",
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
+    return InkWell(
+      onTap: () => _showSelectionModal(context),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 15),
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(10),
+          color: Colors.grey.shade50,
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.garage_outlined, color: Colors.black54),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    provider.selectedVehicle == null
+                        ? "Seleccionar Vehículo"
+                        : provider.selectedVehicle!.plate,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: provider.selectedVehicle == null
+                          ? Colors.redAccent
+                          : Colors.black,
                     ),
-                    Text(
-                      addressToShow,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 25),
-          SizedBox(
-            width: double.infinity,
-            height: 55,
-            child: ElevatedButton(
-              onPressed: onActionPressed,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: color,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                buttonText,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-          if (trip.status != TripStatus.ARRIVED) ...[
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              height: 45,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  Provider.of<HomeProvider>(
-                    context,
-                    listen: false,
-                  ).openExternalNavigation();
-                },
-                icon: const Icon(Icons.navigation_outlined, size: 20),
-                label: const Text("ABRIR NAVEGACIÓN (WAZE/MAPS)"),
-                style: OutlinedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
+                  if (provider.selectedVehicle != null)
+                    Text(
+                      "${provider.selectedVehicle!.brand} ${provider.selectedVehicle!.model}",
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                ],
               ),
             ),
+            const Icon(Icons.arrow_drop_down, color: Colors.black),
           ],
-        ],
+        ),
       ),
     );
   }

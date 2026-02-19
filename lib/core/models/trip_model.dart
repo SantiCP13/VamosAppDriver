@@ -3,20 +3,36 @@ import 'dart:convert';
 import 'package:latlong2/latlong.dart';
 import '../enums/payment_enums.dart';
 
-enum TripStatus { REQUESTED, ACCEPTED, ARRIVED, STARTED, COMPLETED, CANCELLED }
+enum TripStatus {
+  REQUESTED,
+  ACCEPTED,
+  ARRIVED,
+  STARTED,
+  DROPPED_OFF,
+  PAYMENT_PENDING,
+  COMPLETED,
+  CANCELLED,
+}
 
 class Passenger {
   final String name;
   final String nationalId;
+  final String? phone; // Nuevo campo para WhatsApp
 
-  Passenger({required this.name, required this.nationalId});
+  Passenger({required this.name, required this.nationalId, this.phone});
 
-  Map<String, dynamic> toJson() => {'name': name, 'national_id': nationalId};
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'national_id': nationalId,
+    'phone': phone,
+  };
 
   factory Passenger.fromJson(Map<String, dynamic> json) {
     return Passenger(
       name: json['name'] ?? '',
       nationalId: json['national_id'] ?? json['cedula'] ?? '',
+      // Manejo robusto de diferentes nombres de campo del backend
+      phone: json['phone'] ?? json['telefono'] ?? json['celular'],
     );
   }
 }
@@ -27,11 +43,13 @@ class Trip {
   final String? companyId;
   final List<Passenger> passengers;
   final double price;
-  final double? driverCommission;
+  final double driverRevenue; // Lo que realmente recibe el conductor
+  final double platformFee; // La comisión de la App
   final String originAddress;
   final String destinationAddress;
   final LatLng originLocation;
   final LatLng destinationLocation;
+
   final double distanceKm;
   final TripStatus status;
   final PaymentMethod paymentMethod;
@@ -43,7 +61,8 @@ class Trip {
     this.companyId,
     required this.passengers,
     required this.price,
-    this.driverCommission,
+    this.driverRevenue = 0.0,
+    this.platformFee = 0.0,
     required this.originAddress,
     required this.destinationAddress,
     required this.originLocation,
@@ -54,53 +73,87 @@ class Trip {
     this.legalSnapshot,
   });
 
+  // Helpers
   String get passengerName =>
       passengers.isNotEmpty ? passengers.first.name : "Usuario";
 
+  // LOGICA FUEC: Extrae la URL del PDF del snapshot legal
+  String? get fuecUrl {
+    if (legalSnapshot != null && legalSnapshot!.containsKey('fuec_url')) {
+      return legalSnapshot!['fuec_url'];
+    }
+    // Fallback Mock para pruebas si el estado lo permite
+    if (status == TripStatus.ACCEPTED ||
+        status == TripStatus.ARRIVED ||
+        status == TripStatus.STARTED) {
+      return "https://www.ministeriodetransporte.gov.co/documentos/fuec_ejemplo.pdf";
+    }
+    return null;
+  }
+
+  // Factory Mock para pruebas
   factory Trip.mock() {
     return Trip(
       id: "trip_${DateTime.now().millisecondsSinceEpoch}",
       contractId: "contrato_marco_2026",
       companyId: null,
       passengers: [
-        Passenger(name: "Ana María Pérez", nationalId: "10203040"),
-        Passenger(name: "Juanito (Hijo)", nationalId: "TI987654"),
+        Passenger(
+          name: "Ana María Pérez",
+          nationalId: "10203040",
+          phone: "3001234567", // Teléfono para probar WhatsApp
+        ),
       ],
       price: 12500.0,
-      driverCommission: 10000.0,
+      driverRevenue: 10000.0,
+      platformFee: 2500.0,
       originAddress: "Centro Comercial Andino",
       destinationAddress: "Parque de la 93",
       originLocation: const LatLng(4.6668, -74.0526),
       destinationLocation: const LatLng(4.6766, -74.0483),
       distanceKm: 2.5,
       paymentMethod: PaymentMethod.DIGITAL,
+      status: TripStatus.REQUESTED,
+      legalSnapshot: {
+        'fuec_url':
+            'https://www.ministeriodetransporte.gov.co/documentos/fuec_ejemplo.pdf',
+      },
     );
   }
 
-  // --- SOLUCIÓN AQUÍ ---
+  // Método copyWith para inmutabilidad
   Trip copyWith({
     String? id,
+    String? contractId,
+    String? companyId,
     List<Passenger>? passengers,
     double? price,
+    double? driverRevenue,
+    double? platformFee,
+    String? originAddress,
+    String? destinationAddress,
+    LatLng? originLocation,
+    LatLng? destinationLocation,
+    double? distanceKm,
     TripStatus? status,
+    PaymentMethod? paymentMethod,
     Map<String, dynamic>? legalSnapshot,
   }) {
     return Trip(
-      // Se mantiene 'this.id' porque existe un parámetro 'id'
       id: id ?? this.id,
-      // Se quita 'this.' porque NO hay parámetro 'contractId' en copyWith
-      contractId: contractId,
-      companyId: companyId,
+      contractId: contractId ?? this.contractId,
+      companyId: companyId ?? this.companyId,
       passengers: passengers ?? this.passengers,
       price: price ?? this.price,
-      driverCommission: driverCommission,
-      originAddress: originAddress,
-      destinationAddress: destinationAddress,
-      originLocation: originLocation,
-      destinationLocation: destinationLocation,
-      distanceKm: distanceKm,
+      driverRevenue: driverRevenue ?? this.driverRevenue,
+      platformFee: platformFee ?? this.platformFee,
+      originAddress: originAddress ?? this.originAddress,
+      destinationAddress: destinationAddress ?? this.destinationAddress,
+      originLocation: originLocation ?? this.originLocation,
+      destinationLocation: destinationLocation ?? this.destinationLocation,
+      distanceKm: distanceKm ?? this.distanceKm,
       status: status ?? this.status,
-      paymentMethod: paymentMethod,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
       legalSnapshot: legalSnapshot ?? this.legalSnapshot,
     );
   }
@@ -110,7 +163,9 @@ class Trip {
       'uuid': id,
       'contrato_id': contractId,
       'passengers': passengers.map((x) => x.toJson()).toList(),
-      'precio_estimado': price,
+      'precio_total': price,
+      'ganancia_conductor': driverRevenue,
+      'comision_app': platformFee,
       'origen_direccion': originAddress,
       'destino_direccion': destinationAddress,
       'lat_origen': originLocation.latitude,
@@ -132,8 +187,11 @@ class Trip {
               map['passengers'].map((x) => Passenger.fromJson(x)),
             )
           : [],
-      price: (map['precio_estimado'] ?? map['price'])?.toDouble() ?? 0.0,
-      driverCommission: (map['comision_conductor'])?.toDouble(),
+      price: (map['precio_total'] ?? map['price'] ?? 0.0).toDouble(),
+      driverRevenue: (map['ganancia_conductor'] ?? map['driver_revenue'] ?? 0.0)
+          .toDouble(),
+      platformFee: (map['comision_app'] ?? map['platform_fee'] ?? 0.0)
+          .toDouble(),
       originAddress: map['origen_direccion'] ?? map['originAddress'],
       destinationAddress: map['destino_direccion'] ?? map['destinationAddress'],
       originLocation: LatLng(

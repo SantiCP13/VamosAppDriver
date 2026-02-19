@@ -3,6 +3,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:developer'
     as developer; // Usaremos developer.log para logs más profesionales
+import '../../main.dart'; // Para usar el navigatorKey
+import '../di/injection_container.dart'; // Para usar sl
+import '../../features/auth/providers/auth_provider.dart';
+import '../../features/auth/screens/welcome_screen.dart';
+import 'package:flutter/material.dart';
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
@@ -66,7 +71,17 @@ class ApiClient {
 
           if (e.response?.statusCode == 401) {
             developer.log('⚠️ Sesión expirada o no autorizada', name: 'AUTH');
-            // Aquí dispararemos el evento de Logout global más adelante
+
+            // 1. Forzar logout en el Provider
+            sl<AuthProvider>().logout();
+
+            // 2. Redirigir a WelcomeScreen globalmente usando la llave
+            if (navigatorKey.currentState != null) {
+              navigatorKey.currentState!.pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                (route) => false,
+              );
+            }
           }
           return handler.next(e);
         },

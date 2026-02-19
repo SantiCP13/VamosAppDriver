@@ -3,41 +3,31 @@
 // ignore_for_file: constant_identifier_names
 
 /// ESTADO DE VERIFICACIÓN
-///
-/// Controla si el usuario puede pedir viajes.
-/// Mapea a la columna 'verification_status' en la tabla USERS.
 enum UserVerificationStatus {
   PENDING, // Registrado, email no verificado
   CREATED, // Email verificado, faltan datos
   DOCS_UPLOADED, // (Para conductores principalmente)
   UNDER_REVIEW, // (Para conductores o validación manual de empresas)
-  VERIFIED, // PUEDE PEDIR VIAJES
+  VERIFIED, // PUEDE PEDIR VIAJES / CONDUCIR
   REJECTED, // Rechazado por datos inválidos o falta de documentos
-  REVOKED, // BLOQUEADO por mal uso o fraude (Solo admins pueden cambiar a este estado)
+  REVOKED, // BLOQUEADO por mal uso o fraude
 }
 
 /// ROL DEL USUARIO
 enum UserRole {
   NATURAL, // Usuario particular
-  EMPLEADO, // Usuario corporativo (Asociado a una COMPANY)
+  EMPLEADO, // Usuario corporativo
+  DRIVER, // Nuevo: Conductor
 }
 
 /// MODO DE OPERACIÓN
-///
-/// Controla la UI y el flujo de pago.
-/// PERSONAL: Paga en efectivo/wallet.
-/// CORPORATE: El cobro va a la factura de la empresa.
 enum AppMode { PERSONAL, CORPORATE }
 
 /// MODELO DE BENEFICIARIO (PASAJERO ADICIONAL)
-
-/// RESPONSABILIDADES:
-/// 1. Llenar el 'Manifiesto de Pasajeros'
-/// 2. Proveer nombre y CÉDULA para el payload del FUEC.
 class Beneficiary {
-  final String id; // PK
+  final String id;
   final String name;
-  final String documentNumber; // Requerido por ley para el FUEC.
+  final String documentNumber;
 
   Beneficiary({
     required this.id,
@@ -61,47 +51,37 @@ class Beneficiary {
 }
 
 /// MODELO DE USUARIO
-
 class User {
   final String id; // PK (UUID)
 
-  // Variables mutables (pueden cambiar en edición de perfil)
+  // Variables mutables
   String? idPassenger;
   String? idResponsable; // FK manager_id
   String? photoUrl;
 
-  final String email; // Unique Login
+  final String email;
   final String name;
   final String phone;
 
   /// Cédula para FUEC.
-  /// Mapea a 'document_number' en USERS.
   final String documentNumber;
 
   final String address;
 
-  // --- DATOS CORPORATIVOS (RELACIÓN CON COMPANIES) ---
-
-  /// FK: ID de la empresa en BD.
-  /// Vital para buscar el 'moviltrack_contract_id' cuando appMode = CORPORATE.
+  // --- DATOS CORPORATIVOS ---
   final String? companyUuid;
-
-  // Datos visuales de la empresa (Join simple)
   String empresa;
   String nitEmpresa;
 
-  // --- ESTADOS Y CONTROL DE FLUJO ---
-
+  // --- ESTADOS Y ROL ---
   UserRole role;
   UserVerificationStatus verificationStatus;
-
-  /// Define si la solicitud de viaje incluye 'company_uuid' o no.
   AppMode appMode;
 
   // Lista para selección rápida en "Quién viaja?"
   List<Beneficiary> beneficiaries;
 
-  // Autenticación (No se guarda en BD, solo en sesión local)
+  // Autenticación
   String? token;
 
   User({
@@ -121,22 +101,19 @@ class User {
     this.verificationStatus = UserVerificationStatus.CREATED,
     required this.beneficiaries,
     this.appMode =
-        AppMode.CORPORATE, // Por defecto intenta ser corporativo si es empleado
+        AppMode.PERSONAL, // Default a PERSONAL para evitar errores en Driver
     this.token,
   });
 
-  // Helpers de lógica de negocio
   bool get isCorporateMode => appMode == AppMode.CORPORATE;
   bool get isEmployee => role == UserRole.EMPLEADO || idResponsable != null;
+  bool get isDriver => role == UserRole.DRIVER; // Helper útil
 
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
       id: map['id']?.toString() ?? '',
-
-      // Mapeo flexible para ids que vienen del backend
       idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
       idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
-
       email: map['email'] ?? '',
       name: map['name'] ?? map['nombre'] ?? '',
       photoUrl: map['photo_url'],
@@ -144,33 +121,35 @@ class User {
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
       address: map['address'] ?? map['direccion'] ?? '',
 
-      // --- MAPEADO DE EMPRESA ---
-
-      // El backend debe hacer JOIN con COMPANIES para llenar esto
+      // Empresa
       empresa: map['company_name'] ?? map['empresa'] ?? '',
       nitEmpresa: map['company_nit'] ?? map['nit_empresa'] ?? '',
-      companyUuid: map['company_id'], // FK Critical
+      companyUuid: map['company_id'],
 
-      role: (map['role'] == 'EMPLEADO' || map['role_id'] == 2)
-          ? UserRole.EMPLEADO
-          : UserRole.NATURAL,
+      // --- CORRECCIÓN EN ROL ---
+      role: _parseRole(map['role'] ?? map['role_id']),
 
       verificationStatus: _parseStatus(map['status']),
 
-      // Determina el modo inicial basado en la preferencia guardada o el rol
-      appMode: (map['app_mode'] == 'PERSONAL')
-          ? AppMode.PERSONAL
-          : AppMode.CORPORATE,
+      appMode: (map['app_mode'] == 'CORPORATE')
+          ? AppMode.CORPORATE
+          : AppMode.PERSONAL,
 
-      // Carga de beneficiarios (Tabla BENEFICIARIES)
       beneficiaries:
           (map['beneficiaries'] as List<dynamic>?)
               ?.map((e) => Beneficiary.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           [],
 
-      token: map['access_token'], // JWT de Laravel Sanctum
+      token: map['access_token'],
     );
+  }
+
+  // Helper para parsear Roles
+  static UserRole _parseRole(dynamic input) {
+    if (input == 'DRIVER' || input == 'CONDUCTOR') return UserRole.DRIVER;
+    if (input == 'EMPLEADO' || input == 2) return UserRole.EMPLEADO;
+    return UserRole.NATURAL; // Default
   }
 
   static UserVerificationStatus _parseStatus(String? status) {
@@ -196,6 +175,19 @@ class User {
   }
 
   Map<String, dynamic> toMap() {
+    // Helper simple para convertir el Enum a String
+    String roleStr;
+    switch (role) {
+      case UserRole.DRIVER:
+        roleStr = 'DRIVER';
+        break;
+      case UserRole.EMPLEADO:
+        roleStr = 'EMPLEADO';
+        break;
+      default:
+        roleStr = 'NATURAL';
+    }
+
     return {
       'id': id,
       'email': email,
@@ -206,7 +198,7 @@ class User {
       'company_name': empresa,
       'company_nit': nitEmpresa,
       'company_id': companyUuid,
-      'role': role == UserRole.EMPLEADO ? 'EMPLEADO' : 'NATURAL',
+      'role': roleStr, // Guardamos el rol correcto
       'status': verificationStatus.name,
       'app_mode': appMode == AppMode.CORPORATE ? 'CORPORATE' : 'PERSONAL',
       'beneficiaries': beneficiaries.map((b) => b.toJson()).toList(),
