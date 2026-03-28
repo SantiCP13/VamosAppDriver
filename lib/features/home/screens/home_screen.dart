@@ -6,6 +6,9 @@ import 'package:provider/provider.dart';
 // Imports Core & Models
 import '../../../core/models/trip_model.dart';
 import '../providers/home_provider.dart';
+import '../../../features/auth/services/driver_auth_service.dart';
+import '../../auth/screens/welcome_screen.dart';
+import '../../../core/models/user_model.dart';
 
 // Widgets
 import '../widgets/trip_request_sheet.dart';
@@ -19,18 +22,97 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = context.read<HomeProvider>();
       provider.initLocation();
       provider.loadVehicles();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // --- DETECTOR DE SEGUNDO PLANO ---
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkKillSwitchSilently();
+    }
+  }
+
+  Future<void> _checkKillSwitchSilently() async {
+    try {
+      final authService = DriverAuthService();
+      final status = await authService.verifySessionAndGetStatus();
+
+      if (!mounted) return;
+
+      // Si el administrador cambió su estado a falso en Laravel (ya no está verificado)
+      if (status != UserVerificationStatus.VERIFIED && status != null) {
+        _showKillSwitchModal();
+      }
+    } catch (e) {
+      // Si tira error 403, el interceptor de api_client.dart atrapará el error
+      // y lanzará el Modal desde allá.
+    }
+  }
+
+  void _showKillSwitchModal() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.block, color: Color.fromARGB(255, 8, 7, 71), size: 28),
+              SizedBox(width: 10),
+              Text(
+                "Cuenta Inactiva",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+            ],
+          ),
+          content: const Text(
+            "Tu cuenta ha sido desactivada o puesta en revisión.\n\nPor favor, contacta a soporte:\n\n📧 soporte@vamosapp.com\n📞 +57 300 000 0000",
+            style: TextStyle(fontSize: 14),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.black),
+              onPressed: () async {
+                await DriverAuthService().logout();
+                if (!mounted) return;
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                  (route) => false,
+                );
+              },
+              child: const Text(
+                "Entendido",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override

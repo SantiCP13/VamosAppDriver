@@ -129,7 +129,7 @@ class User {
       // --- CORRECCIÓN EN ROL ---
       role: _parseRole(map['role'] ?? map['role_id']),
 
-      verificationStatus: _parseStatus(map['status']),
+      verificationStatus: _parseStatus(map),
 
       appMode: (map['app_mode'] == 'CORPORATE')
           ? AppMode.CORPORATE
@@ -152,26 +152,42 @@ class User {
     return UserRole.NATURAL; // Default
   }
 
-  static UserVerificationStatus _parseStatus(String? status) {
-    if (status == null) return UserVerificationStatus.CREATED;
-    switch (status.toUpperCase()) {
-      case 'ACTIVE':
-      case 'VERIFIED':
-        return UserVerificationStatus.VERIFIED;
-      case 'PENDING':
-      case 'UNVERIFIED':
-        return UserVerificationStatus.PENDING;
-      case 'UNDER_REVIEW':
-        return UserVerificationStatus.UNDER_REVIEW;
-      case 'DOCS_UPLOADED':
-        return UserVerificationStatus.DOCS_UPLOADED;
-      case 'REJECTED':
-        return UserVerificationStatus.REJECTED;
-      case 'REVOKED':
-        return UserVerificationStatus.REVOKED;
-      default:
-        return UserVerificationStatus.CREATED;
+  static UserVerificationStatus _parseStatus(Map<String, dynamic> map) {
+    final status = map['status'];
+
+    // 1. Si el backend envía explícitamente un texto en 'status'
+    if (status != null) {
+      switch (status.toString().toUpperCase()) {
+        case 'ACTIVE':
+        case 'VERIFIED':
+          return UserVerificationStatus.VERIFIED;
+        case 'PENDING':
+        case 'UNVERIFIED':
+          return UserVerificationStatus.PENDING;
+        case 'UNDER_REVIEW':
+          return UserVerificationStatus.UNDER_REVIEW;
+        case 'DOCS_UPLOADED':
+          return UserVerificationStatus.DOCS_UPLOADED;
+        case 'REJECTED':
+          return UserVerificationStatus.REJECTED;
+        case 'REVOKED':
+          return UserVerificationStatus.REVOKED;
+      }
     }
+
+    // 2. Si no hay 'status', lo deducimos del booleano 'active' de Laravel
+    if (map.containsKey('active')) {
+      bool isActive = map['active'] == true || map['active'] == 1;
+
+      // Si está activo = VERIFICADO (Home)
+      // Si NO está activo pero ya se registró (y subió docs) = EN REVISIÓN
+      return isActive
+          ? UserVerificationStatus.VERIFIED
+          : UserVerificationStatus.UNDER_REVIEW;
+    }
+
+    // Default de seguridad
+    return UserVerificationStatus.CREATED;
   }
 
   Map<String, dynamic> toMap() {

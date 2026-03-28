@@ -4,7 +4,7 @@ import '../../../core/models/user_model.dart';
 
 import '../services/driver_auth_service.dart';
 import '../../home/screens/home_screen.dart';
-import 'welcome_screen.dart'; // Asegúrate de que este import exista
+import 'welcome_screen.dart';
 
 class VerificationCheckScreen extends StatefulWidget {
   const VerificationCheckScreen({super.key});
@@ -21,47 +21,43 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
   @override
   void initState() {
     super.initState();
-    // Consultamos el estado al entrar, pero sin bloquear la UI agresivamente
     _checkStatusSilent();
   }
 
-  /// Consulta el estado real al Backend/Mock sin interacción del usuario
   Future<void> _checkStatusSilent() async {
     try {
-      final status = await _authService.checkStatus();
-
+      // CORRECCIÓN AQUÍ: Llamamos a la nueva función que creamos en el auth_service
+      final status = await _authService.verifySessionAndGetStatus();
       if (!mounted) return;
 
-      // Si por alguna razón el admin ya lo aprobó en el backend:
+      // Si es null, significa que no hay token válido o fue revocado en backend
+      if (status == null) {
+        await _handleBackToStart();
+        return;
+      }
+
       if (status == UserVerificationStatus.VERIFIED) {
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const HomeScreen()),
           (route) => false,
         );
-      }
-      // Si fue rechazado:
-      else if (status == UserVerificationStatus.REJECTED) {
+      } else if (status == UserVerificationStatus.REJECTED) {
         _showSnackBar(
           'Documentos rechazados. Contacta a soporte.',
           isError: true,
         );
       }
-      // Si sigue PENDING, no hacemos nada, se queda en esta pantalla.
     } catch (e) {
-      // Errores silenciosos en init
       debugPrint("Error verificando estado: $e");
     }
   }
 
   Future<void> _handleBackToStart() async {
     setState(() => _isLoading = true);
-    // Cerramos sesión para limpiar tokens y estado
     await _authService.logout();
-
     if (!mounted) return;
 
-    // Volvemos a la pantalla de bienvenida (Login/Registro)
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
@@ -95,25 +91,24 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
         ),
         automaticallyImplyLeading: false,
       ),
+      // SOLUCIÓN A PRUEBA DE BALAS PARA EL SCROLL
       body: RefreshIndicator(
         onRefresh: _checkStatusSilent,
         color: Colors.green,
-        child: LayoutBuilder(
-          // Usamos LayoutBuilder para obtener la altura real disponible
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Container(
-                // CAMBIO 1: Altura completa (constraints.maxHeight) en lugar de * 0.8
-                height: constraints.maxHeight,
-                padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 24,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // CAMBIO 2: Spacer arriba para empujar el contenido al centro
-                    const Spacer(),
-
-                    // Icono de Estado
+                    // Icono
                     Container(
                       padding: const EdgeInsets.all(30),
                       decoration: BoxDecoration(
@@ -125,13 +120,12 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                         ).withValues(alpha: 0.1),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(
+                      child: const Icon(
                         Icons.inventory_rounded,
                         size: 80,
-                        color: const Color.fromARGB(255, 10, 4, 74),
+                        color: Color.fromARGB(255, 10, 4, 74),
                       ),
                     ),
-
                     const SizedBox(height: 32),
 
                     Text(
@@ -143,11 +137,10 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                         color: Colors.green,
                       ),
                     ),
-
                     const SizedBox(height: 16),
 
                     Text(
-                      "Hemos recibido tus documentos (Cédula y Licencia). El equipo administrativo validará la información para habilitarte en la plataforma.",
+                      "Hemos recibido tus documentos. El equipo administrativo validará la información para habilitarte en la plataforma.",
                       textAlign: TextAlign.center,
                       style: GoogleFonts.poppins(
                         fontSize: 14,
@@ -155,16 +148,13 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                         height: 1.6,
                       ),
                     ),
+                    const SizedBox(height: 32),
 
-                    const SizedBox(height: 24),
-
-                    // Nota informativa
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: Colors.green.withValues(alpha: 0.8),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.white),
                       ),
                       child: Row(
                         children: [
@@ -187,16 +177,17 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                       ),
                     ),
 
-                    const Spacer(), // Spacer existente (empuja el botón abajo)
-                    // Botón "Volver al Inicio"
+                    const SizedBox(height: 48),
+
+                    // Botón
                     SizedBox(
                       width: double.infinity,
                       height: 56,
                       child: OutlinedButton(
                         onPressed: _isLoading ? null : _handleBackToStart,
                         style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                            color: const Color.fromARGB(255, 7, 3, 54),
+                          side: const BorderSide(
+                            color: Color.fromARGB(255, 7, 3, 54),
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -220,15 +211,11 @@ class _VerificationCheckScreenState extends State<VerificationCheckScreen> {
                               ),
                       ),
                     ),
-
-                    const SizedBox(
-                      height: 30,
-                    ), // Espacio extra al final para que no pegue al borde
                   ],
                 ),
               ),
-            );
-          },
+            ),
+          ],
         ),
       ),
     );

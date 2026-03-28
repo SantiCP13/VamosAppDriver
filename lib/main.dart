@@ -16,31 +16,27 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  debugPrint("1 - Flutter iniciado");
+
   try {
     await dotenv.load(fileName: ".env");
+    debugPrint("2 - dotenv cargado");
   } catch (e) {
-    debugPrint("Nota: No se encontró archivo .env, iniciando en modo MOCK.");
+    debugPrint("Nota: No se encontró archivo .env");
   }
 
-  // Inicializamos la Inyección de Dependencias
+  debugPrint("3 - antes de DI");
+
   await di.init();
+
+  debugPrint("4 - después de DI");
 
   runApp(
     MultiProvider(
       providers: [
-        // 1. AuthProvider (Singleton)
         ChangeNotifierProvider(create: (_) => di.sl<AuthProvider>()),
-
-        // 2. WalletProvider (Singleton - Inyectado vía GetIt)
         ChangeNotifierProvider(create: (_) => di.sl<WalletProvider>()),
-
-        // 3. HistoryProvider (Singleton - Inyectado vía GetIt)
-        // ESTA ES LA LÍNEA QUE FALTABA PARA EVITAR EL CRASH
         ChangeNotifierProvider(create: (_) => di.sl<HistoryProvider>()),
-
-        // 4. HomeProvider
-        // Nota: Si HomeProvider no está en GetIt, se instancia manual.
-        // Asegúrate de que HomeProvider use sl<T>() internamente.
         ChangeNotifierProvider(create: (_) => HomeProvider()),
       ],
       child: const MyApp(),

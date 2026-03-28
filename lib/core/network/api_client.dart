@@ -65,17 +65,23 @@ class ApiClient {
         },
         onError: (DioException e, handler) {
           developer.log(
-            '❌ API Error [$envType]: ${e.type} - ${e.message}',
-            name: 'API_ERR',
+            '❌ ERROR EN: ${e.requestOptions.path} | STATUS: ${e.response?.statusCode}',
+            name: 'API_DEBUG',
           );
 
-          if (e.response?.statusCode == 401) {
-            developer.log('⚠️ Sesión expirada o no autorizada', name: 'AUTH');
+          final String path = e.requestOptions.path.toLowerCase();
+          // Detección mejorada: si es login o el error es de validación (422), NO EXPULSAR
+          final bool isLoginRequest =
+              path.endsWith('/login') || path.contains('login');
+          final bool isValidationError = e.response?.statusCode == 422;
 
-            // 1. Forzar logout en el Provider
+          if (isLoginRequest || isValidationError) {
+            return handler.next(e); // Pasa el error directamente a la pantalla
+          }
+
+          // Solo expulsar si NO es login y es 401/403
+          if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
             sl<AuthProvider>().logout();
-
-            // 2. Redirigir a WelcomeScreen globalmente usando la llave
             if (navigatorKey.currentState != null) {
               navigatorKey.currentState!.pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const WelcomeScreen()),

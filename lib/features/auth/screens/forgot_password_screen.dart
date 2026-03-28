@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
+import '../services/driver_auth_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   final String? emailPreloadded;
@@ -13,7 +14,7 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final PageController _pageController = PageController();
-
+  final _authService = DriverAuthService();
   // Controladores
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _otpController = TextEditingController();
@@ -23,6 +24,25 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _isLoading = false;
   bool _obscurePass = true;
   int _currentStep = 0; // 0: Email, 1: OTP, 2: New Password
+  int _resendTimer = 0; // Segundos restantes
+  bool _canResend = true;
+
+  void _startResendTimer() {
+    setState(() {
+      _resendTimer = 60; // Espera de 1 minuto
+      _canResend = false;
+    });
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() => _resendTimer--);
+      if (_resendTimer <= 0) {
+        setState(() => _canResend = true);
+        return false;
+      }
+      return true;
+    });
+  }
 
   @override
   void initState() {
@@ -66,8 +86,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
-  // --- LOGICA DE MOCK (Simulación para Drivers) ---
-  // Cuando conectes Laravel, mueve esto a DriverAuthService
+  // Instancia del servicio
 
   Future<void> _sendCode() async {
     final email = _emailController.text.trim();
@@ -78,32 +97,45 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     setState(() => _isLoading = true);
 
-    // SIMULACIÓN DE API
-    await Future.delayed(const Duration(seconds: 2));
-    // Aquí llamarías a: await DriverAuthService.sendRecovery(email);
+    try {
+      await _authService.sendPasswordResetCode(email);
 
-    setState(() => _isLoading = false);
-    _showSnack("Código enviado a tu correo.");
-    _nextPage();
+      // 🔥 AGREGA ESTA LÍNEA AQUÍ PARA QUITAR EL ERROR:
+      _startResendTimer();
+
+      setState(() => _isLoading = false);
+      _showSnack("Código enviado a tu correo.");
+
+      // Solo avanzamos de página si estamos en el paso 0 (Email)
+      if (_currentStep == 0) {
+        _nextPage();
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
+    }
   }
 
   Future<void> _verifyCode() async {
     final code = _otpController.text.trim();
-    if (code.length < 4) {
+    if (code.length < 6) {
       _showSnack("El código debe tener 6 dígitos", isError: true);
       return;
     }
 
     setState(() => _isLoading = true);
 
-    // SIMULACIÓN DE API
-    await Future.delayed(const Duration(seconds: 2));
-    // Aquí llamarías a: await DriverAuthService.verifyToken(email, code);
-
-    setState(() => _isLoading = false);
-
-    // Mock: Aceptamos cualquier código para pruebas de UI
-    _nextPage();
+    try {
+      await _authService.verifyPasswordResetCode(
+        _emailController.text.trim(),
+        code,
+      );
+      setState(() => _isLoading = false);
+      _nextPage();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
+    }
   }
 
   Future<void> _changePassword() async {
@@ -124,14 +156,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     setState(() => _isLoading = true);
 
-    // SIMULACIÓN DE API
-    await Future.delayed(const Duration(seconds: 2));
-    // Aquí llamarías a: await DriverAuthService.resetPassword(email, p1);
-
-    setState(() => _isLoading = false);
-    _showSnack("¡Contraseña actualizada! Inicia sesión.");
-
-    if (mounted) Navigator.pop(context);
+    try {
+      await _authService.resetPassword(
+        _emailController.text.trim(),
+        _otpController.text.trim(),
+        p1,
+      );
+      setState(() => _isLoading = false);
+      _showSnack("¡Contraseña actualizada! Inicia sesión.");
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
+    }
   }
 
   void _nextPage() {
@@ -319,13 +356,18 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
           const SizedBox(height: 20),
 
+          // Busca esta parte en tu ForgotPasswordScreen.dart:
           Center(
             child: TextButton(
-              onPressed: () => _showSnack("Código reenviado (Simulado)"),
+              onPressed: _canResend
+                  ? _sendCode
+                  : null, // Desactivado si no puede reenviar
               child: Text(
-                "¿No recibiste el código?",
+                _canResend
+                    ? "¿No recibiste el código? Reenviar"
+                    : "Reenviar en $_resendTimer s",
                 style: GoogleFonts.poppins(
-                  color: AppColors.primaryGreen,
+                  color: _canResend ? AppColors.primaryGreen : Colors.grey,
                   fontWeight: FontWeight.w600,
                 ),
               ),

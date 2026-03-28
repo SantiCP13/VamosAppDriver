@@ -5,11 +5,11 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
 import '../services/driver_auth_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 // Pantallas de navegación
 import 'documents_upload_screen.dart';
 import 'verification_check_screen.dart';
-import 'register_screen.dart'; // Asumo que existe o se creará
 import '../../home/screens/home_screen.dart';
 import '../screens/forgot_password_screen.dart';
 
@@ -22,17 +22,31 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   // --- CONTROLADORES ---
-  // Mantenemos los valores por defecto para facilitar tus pruebas
-  final _emailController = TextEditingController(text: "ok@test.com");
-  final _passwordController = TextEditingController(text: "123456");
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  // Servicio de autenticación del Driver
   final _authService = DriverAuthService();
   final _passwordFocusNode = FocusNode();
+  bool _rememberMe = false;
+  final _storage = const FlutterSecureStorage();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedEmail();
+  }
+
+  Future<void> _loadSavedEmail() async {
+    final savedEmail = await _storage.read(key: 'saved_email');
+    if (savedEmail != null && savedEmail.isNotEmpty) {
+      setState(() {
+        _emailController.text = savedEmail;
+        _rememberMe = true;
+      });
+    }
+  }
 
   // --- ESTADOS DE LA UI ---
-  bool _isLoading = false;
-  bool _emailExists = false; // Controla la animación de mostrar el password
   bool _obscurePassword = true;
 
   @override
@@ -43,71 +57,76 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  /// LÓGICA CENTRAL
-  Future<void> _handleContinue() async {
+  // --- MODAL INAMOVIBLE ---
+  void _showLoadingModal() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false, // Evita que se cierre con el botón atrás de Android
+        child: Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen),
+        ),
+      ),
+    );
+  }
+
+  void _closeLoadingModal() {
+    if (Navigator.of(context, rootNavigator: true).canPop()) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
+  /// LÓGICA CENTRAL DE LOGIN REAL
+  Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
     final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
     if (email.isEmpty || !email.contains('@')) {
       _showSnack("Por favor ingresa un correo válido", isError: true);
       return;
     }
 
-    if (_emailExists && _passwordController.text.isEmpty) {
+    if (password.isEmpty) {
       _showSnack("Ingresa tu contraseña", isError: true);
       _passwordFocusNode.requestFocus();
       return;
     }
 
-    setState(() => _isLoading = true);
+    _showLoadingModal();
 
     try {
-      if (!_emailExists) {
-        // --- FASE 1: VALIDACIÓN LIMPIA ---
-        final exists = await _mockLoginValidation(email);
+      final user = await _authService.login(email, password);
 
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-
-        if (exists) {
-          setState(() => _emailExists = true);
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (mounted) {
-              FocusScope.of(context).requestFocus(_passwordFocusNode);
-            }
-          });
-        } else {
-          _showRegisterDialog(email);
-        }
+      if (_rememberMe) {
+        await _storage.write(key: 'saved_email', value: email);
       } else {
-        // --- FASE 2: LOGIN REAL ---
-        final user = await _authService.login(
-          email,
-          _passwordController.text.trim(),
-        );
-
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-        _navigateBasedOnStatus(user);
+        await _storage.delete(key: 'saved_email');
       }
+
+      if (!mounted) return;
+      _closeLoadingModal();
+
+      _navigateBasedOnStatus(user);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      _closeLoadingModal();
+
+      // Extraemos el mensaje limpio (Laravel envía "Credenciales inválidas")
       String msg = e.toString().replaceAll('Exception: ', '');
+
+      // Mostramos el SnackBar rojo que ya tienes configurado
       _showSnack(msg, isError: true);
 
-      if (msg.toLowerCase().contains('password') ||
+      // Si el error es de credenciales, limpiamos la clave y pedimos foco
+      if (msg.toLowerCase().contains('credenciales') ||
+          msg.toLowerCase().contains('inválidas') ||
           msg.toLowerCase().contains('contraseña')) {
         _passwordController.clear();
         _passwordFocusNode.requestFocus();
       }
     }
-  }
-
-  /// Simula la latencia y extrae la lógica de verificación
-  Future<bool> _mockLoginValidation(String email) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    return !email.startsWith("nuevo");
   }
 
   void _navigateBasedOnStatus(User user) {
@@ -117,17 +136,14 @@ class _LoginScreenState extends State<LoginScreen> {
       case UserVerificationStatus.VERIFIED:
         nextScreen = const HomeScreen();
         break;
-
       case UserVerificationStatus.CREATED:
       case UserVerificationStatus.PENDING:
         nextScreen = const DocumentsUploadScreen();
         break;
-
       case UserVerificationStatus.DOCS_UPLOADED:
       case UserVerificationStatus.UNDER_REVIEW:
         nextScreen = const VerificationCheckScreen();
         break;
-
       case UserVerificationStatus.REJECTED:
       case UserVerificationStatus.REVOKED:
         _showSnack(
@@ -142,46 +158,6 @@ class _LoginScreenState extends State<LoginScreen> {
       context,
       MaterialPageRoute(builder: (_) => nextScreen),
       (route) => false,
-    );
-  }
-
-  // --- UI HELPERS (Copiados del User App) ---
-
-  void _showRegisterDialog(String email) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Cuenta no encontrada"),
-        content: Text("El conductor con correo $email no está registrado."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              "Reintentar",
-              style: TextStyle(color: Colors.grey),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryGreen,
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  // AQUÍ PASAS EL CORREO:
-                  builder: (_) => RegisterScreen(emailPreIngresado: email),
-                ),
-              );
-            },
-            child: const Text(
-              "Registrarme",
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -259,90 +235,56 @@ class _LoginScreenState extends State<LoginScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: _emailExists
-            ? BackButton(
-                color: Colors.black,
-                onPressed: () {
-                  setState(() {
-                    _emailExists = false;
-                    _passwordController.clear();
-                  });
-                },
-              )
-            : null, // Sin botón de atrás en la fase inicial
+        iconTheme: const IconThemeData(color: Colors.black),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: AutofillGroup(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // TÍTULO
-                Text(
-                  _emailExists ? "Hola de nuevo Driver!" : "Login Driver",
-                  style: GoogleFonts.poppins(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryGreen,
-                  ),
-                ),
-
-                if (_emailExists)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8.0, bottom: 30),
-                    child: Text(
-                      "Confirma tu identidad para iniciar ruta",
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  )
-                else
-                  const SizedBox(height: 50),
-
-                // --- CAMPO EMAIL ---
-                TextField(
-                  controller: _emailController,
-                  readOnly: _emailExists,
-                  keyboardType: TextInputType.emailAddress,
-                  textInputAction: TextInputAction.next,
-                  autofillHints: const [AutofillHints.email],
-                  style: GoogleFonts.poppins(
-                    color: _emailExists ? Colors.grey.shade700 : Colors.black,
-                  ),
-                  decoration: _getInputStyle(
-                    label: "Correo electrónico",
-                    icon: Icons.alternate_email,
-                    suffixIcon: _emailExists
-                        ? IconButton(
-                            tooltip: "Editar correo",
-                            icon: const Icon(
-                              Icons.edit,
-                              size: 20,
-                              color: AppColors.primaryGreen,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _emailExists = false;
-                                _passwordController.clear();
-                              });
-                            },
-                          )
-                        : null,
-                  ),
-                  onSubmitted: (_) {
-                    if (!_emailExists) _handleContinue();
-                  },
-                ),
-
-                // --- CAMPO PASSWORD (ANIMADO) ---
-                AnimatedCrossFade(
-                  firstChild: Container(height: 0),
-                  secondChild: Column(
+        child: CustomScrollView(
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: AutofillGroup(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        "Login Driver",
+                        style: GoogleFonts.poppins(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "Ingresa tus credenciales para iniciar ruta",
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+
+                      // --- CAMPO EMAIL ---
+                      TextField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
+                        style: GoogleFonts.poppins(color: Colors.black),
+                        decoration: _getInputStyle(
+                          label: "Correo electrónico",
+                          icon: Icons.alternate_email,
+                        ),
+                        onSubmitted: (_) => FocusScope.of(
+                          context,
+                        ).requestFocus(_passwordFocusNode),
+                      ),
+
                       const SizedBox(height: 20),
+
+                      // --- CAMPO PASSWORD ---
                       TextField(
                         controller: _passwordController,
                         focusNode: _passwordFocusNode,
@@ -365,84 +307,105 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
-                        onSubmitted: (_) => _handleContinue(),
+                        onSubmitted: (_) => _handleLogin(),
                       ),
 
-                      // Link de Olvidé contraseña (Opcional para driver)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: () {
-                            // AQUÍ ESTA EL CAMBIO:
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ForgotPasswordScreen(
-                                  emailPreloadded: _emailController.text,
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          // --- NUEVO: CHECKBOX RECORDAR (FLEXIBLE) ---
+                          Expanded(
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: Checkbox(
+                                    value: _rememberMe,
+                                    activeColor: AppColors.primaryGreen,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    onChanged: (val) {
+                                      setState(
+                                        () => _rememberMe = val ?? false,
+                                      );
+                                    },
+                                  ),
                                 ),
-                              ),
-                            );
-                          },
-                          child: Text(
-                            "¿Olvidaste tu contraseña?",
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    "Recordar correo",
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Colors.grey[700],
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  crossFadeState: _emailExists
-                      ? CrossFadeState.showSecond
-                      : CrossFadeState.showFirst,
-                  duration: const Duration(milliseconds: 300),
-                  sizeCurve: Curves.easeInOut,
-                ),
-
-                const SizedBox(height: 30),
-
-                // --- BOTÓN PRINCIPAL ---
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _handleContinue,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      elevation: 4,
-                      shadowColor: AppColors.primaryGreen.withValues(
-                        alpha: 0.4,
-                      ),
-                    ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
+                          // --- BOTÓN ORIGINAL (ACORTADO) ---
+                          TextButton(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ForgotPasswordScreen(
+                                    emailPreloadded: _emailController.text,
+                                  ),
+                                ),
+                              );
+                            },
+                            child: Text(
+                              "¿Olvidaste tu contraseña?",
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey[600],
+                              ),
                             ),
-                          )
-                        : Text(
-                            _emailExists ? "Iniciar Sesión" : "Continuar",
+                          ),
+                        ],
+                      ),
+
+                      const Spacer(),
+
+                      // --- BOTÓN PRINCIPAL ---
+                      SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: _handleLogin,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            elevation: 4,
+                            shadowColor: AppColors.primaryGreen.withValues(
+                              alpha: 0.4,
+                            ),
+                          ),
+                          child: Text(
+                            "Iniciar Sesión",
                             style: GoogleFonts.poppins(
                               color: Colors.white,
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                   ),
                 ),
-
-                const SizedBox(height: 30),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );

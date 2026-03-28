@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../services/driver_auth_service.dart';
-import 'documents_upload_screen.dart';
+import 'verification_check_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   final String? emailPreIngresado;
@@ -17,11 +19,18 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  // Controladores (Ya NO necesitamos _plateCtrl)
+  // Controladores de texto
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
+  final _docCtrl = TextEditingController();
+  final _fvLicenciaCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+
+  // Archivos
+  File? _selfieFile;
+  File? _cedulaFile;
+  final ImagePicker _picker = ImagePicker();
 
   final _authService = DriverAuthService();
 
@@ -41,36 +50,109 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
-    _passCtrl.dispose(); // _plateCtrl eliminado
+    _docCtrl.dispose();
+    _fvLicenciaCtrl.dispose();
+    _passCtrl.dispose();
     super.dispose();
   }
 
+  // --- LÓGICA DE FOTOS ---
+  Future<void> _pickImage(bool isSelfie) async {
+    // Para selfie abrimos cámara frontal, para documento abrimos cámara trasera o galería
+    final XFile? image = await _picker.pickImage(
+      source: isSelfie ? ImageSource.camera : ImageSource.gallery,
+      imageQuality: 70, // Comprimimos un poco para que no pese tanto
+      preferredCameraDevice: isSelfie ? CameraDevice.front : CameraDevice.rear,
+    );
+
+    if (image != null) {
+      setState(() {
+        if (isSelfie) {
+          _selfieFile = File(image.path);
+        } else {
+          _cedulaFile = File(image.path);
+        }
+      });
+    }
+  }
+
+  // --- LÓGICA DE FECHA ---
+  Future<void> _selectDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(days: 30)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime(2050),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primaryGreen,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      setState(() {
+        _fvLicenciaCtrl.text =
+            "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+      });
+    }
+  }
+
+  // --- SUBMIT ---
   Future<void> _handleRegister() async {
+    // 1. Validar Textos
     if (!_formKey.currentState!.validate()) {
       _showSnack("Por favor revisa los campos en rojo", isError: true);
       return;
     }
 
+    // 2. Validar Fotos
+    if (_selfieFile == null || _cedulaFile == null) {
+      _showSnack(
+        "Debes adjuntar tu Selfie y la foto de tu Documento",
+        isError: true,
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
+    // Modal inamovible
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: AppColors.primaryGreen),
+      ),
+    );
+
     try {
-      // CORRECCIÓN: Eliminamos el parámetro 'plate'
       await _authService.register(
         name: _nameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         password: _passCtrl.text.trim(),
+        passwordConfirmation: _passCtrl.text.trim(),
+        documento: _docCtrl.text.trim(),
+        fvLicencia: _fvLicenciaCtrl.text.trim(),
+        selfieFile: _selfieFile!,
+        cedulaFile: _cedulaFile!,
       );
 
       if (!mounted) return;
 
-      Navigator.pushAndRemoveUntil(
+      Navigator.of(context).pop();
+      Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const DocumentsUploadScreen()),
-        (route) => false,
+        MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
       );
     } catch (e) {
       if (!mounted) return;
+      Navigator.of(context).pop();
       String msg = e.toString().replaceAll('Exception: ', '');
       _showSnack(msg, isError: true);
     } finally {
@@ -78,7 +160,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  // --- UI HELPERS (Sin cambios) ---
+  // --- UI HELPERS ---
   void _showSnack(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -136,6 +218,69 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  // Widget para los botones de subir archivos
+  Widget _buildFilePickerBtn({
+    required String title,
+    required IconData icon,
+    required bool isSelfie,
+    required File? file,
+  }) {
+    bool hasFile = file != null;
+    return InkWell(
+      onTap: () => _pickImage(isSelfie),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: hasFile
+              ? AppColors.primaryGreen.withValues(alpha: 0.1)
+              : Colors.grey.shade50,
+          border: Border.all(
+            color: hasFile ? AppColors.primaryGreen : Colors.grey.shade300,
+            width: 1.5,
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              hasFile ? Icons.check_circle : icon,
+              color: hasFile ? AppColors.primaryGreen : Colors.grey.shade600,
+              size: 28,
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      color: const Color.fromARGB(221, 1, 26, 85),
+                    ),
+                  ),
+                  Text(
+                    hasFile
+                        ? "Archivo cargado con éxito"
+                        : "Toca para subir o tomar foto",
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: hasFile
+                          ? AppColors.primaryGreen
+                          : Colors.grey.shade500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -162,9 +307,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.only(top: 8.0, bottom: 30),
+                  padding: const EdgeInsets.only(top: 8.0, bottom: 20),
                   child: Text(
-                    "Crea tu perfil profesional. La asignación de vehículo se realizará posteriormente.",
+                    "Completa tus datos y sube tus documentos para empezar a conducir.",
                     style: GoogleFonts.poppins(
                       fontSize: 14,
                       color: Colors.grey[600],
@@ -172,11 +317,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ),
 
-                // --- NOMBRE ---
+                // --- TEXTOS ---
                 TextFormField(
                   controller: _nameCtrl,
                   textCapitalization: TextCapitalization.words,
-                  style: GoogleFonts.poppins(),
                   decoration: _getInputStyle(
                     label: "Nombre Completo",
                     icon: Icons.person_outline,
@@ -185,11 +329,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // --- CELULAR ---
+                TextFormField(
+                  controller: _docCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: _getInputStyle(
+                    label: "Cédula de Ciudadanía",
+                    icon: Icons.badge_outlined,
+                  ),
+                  validator: (v) => v!.isEmpty ? 'Requerido' : null,
+                ),
+                const SizedBox(height: 16),
+
                 TextFormField(
                   controller: _phoneCtrl,
                   keyboardType: TextInputType.phone,
-                  style: GoogleFonts.poppins(),
                   decoration: _getInputStyle(
                     label: "Celular",
                     icon: Icons.phone_android_outlined,
@@ -198,26 +351,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // --- EMAIL ---
                 TextFormField(
                   controller: _emailCtrl,
                   keyboardType: TextInputType.emailAddress,
-                  style: GoogleFonts.poppins(),
                   decoration: _getInputStyle(
                     label: "Correo electrónico",
                     icon: Icons.alternate_email,
                   ),
                   validator: (v) => !v!.contains('@') ? 'Inválido' : null,
                 ),
-
-                // --- SECCIÓN VEHÍCULO ELIMINADA ---
                 const SizedBox(height: 16),
 
-                // --- CONTRASEÑA ---
+                TextFormField(
+                  controller: _fvLicenciaCtrl,
+                  readOnly: true,
+                  onTap: _selectDate,
+                  decoration: _getInputStyle(
+                    label: "Fecha Vencimiento Licencia",
+                    icon: Icons.calendar_month_outlined,
+                  ),
+                  validator: (v) => v!.isEmpty ? 'Requerido' : null,
+                ),
+                const SizedBox(height: 24),
+
+                // --- CONTRASEÑAS ---
                 TextFormField(
                   controller: _passCtrl,
                   obscureText: _obscurePass,
-                  style: GoogleFonts.poppins(),
                   decoration: _getInputStyle(
                     label: "Crear Contraseña",
                     icon: Icons.lock_outline,
@@ -231,10 +391,36 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                   ),
                   validator: (v) =>
-                      v!.length < 6 ? 'Mínimo 6 caracteres' : null,
+                      v!.length < 8 ? 'Mínimo 8 caracteres' : null,
                 ),
+                const SizedBox(height: 16),
 
                 const SizedBox(height: 40),
+                // --- ARCHIVOS ---
+                Text(
+                  "Documentos Requeridos",
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                _buildFilePickerBtn(
+                  title: "Selfie del Conductor",
+                  icon: Icons.camera_front_outlined,
+                  isSelfie: true,
+                  file: _selfieFile,
+                ),
+                const SizedBox(height: 12),
+
+                _buildFilePickerBtn(
+                  title: "PDF con Cédula y Licencia",
+                  icon: Icons.document_scanner_outlined,
+                  isSelfie: false,
+                  file: _cedulaFile,
+                ),
+                const SizedBox(height: 24),
 
                 // --- BOTÓN ---
                 SizedBox(
@@ -247,28 +433,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(15),
                       ),
-                      elevation: 4,
-                      shadowColor: AppColors.primaryGreen.withValues(
-                        alpha: 0.4,
+                    ),
+                    child: Text(
+                      "REGISTRARME Y ENVIAR",
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : Text(
-                            "REGISTRARME",
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
                   ),
                 ),
               ],
