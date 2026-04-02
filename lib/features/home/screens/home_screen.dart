@@ -18,6 +18,7 @@ import '../widgets/trip_request_sheet.dart';
 import '../widgets/trip_panel_sheet.dart'; // <--- NUEVO IMPORT
 import '../widgets/side_menu.dart';
 import 'dart:math' as math; // Para la rotación
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,8 +30,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  final String myMapboxToken =
-      "pk.eyJ1IjoidmFtb3NhcHBjb2wiLCJhIjoiY21uZGxldzJtMWc3MzJwcHI5YzNmdmQ4ZCJ9.QsTim64a5eVStoAKYk3kcg";
+  final String myMapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
   @override
   void initState() {
     super.initState();
