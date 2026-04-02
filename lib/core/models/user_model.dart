@@ -147,9 +147,15 @@ class User {
 
   // Helper para parsear Roles
   static UserRole _parseRole(dynamic input) {
-    if (input == 'DRIVER' || input == 'CONDUCTOR') return UserRole.DRIVER;
-    if (input == 'EMPLEADO' || input == 2) return UserRole.EMPLEADO;
-    return UserRole.NATURAL; // Default
+    // Convertimos a string por si viene int o string
+    final String role = input.toString();
+    if (role == 'DRIVER' || role == 'CONDUCTOR' || role == '3') {
+      return UserRole.DRIVER;
+    }
+    if (role == 'EMPLEADO' || role == '2') {
+      return UserRole.EMPLEADO;
+    }
+    return UserRole.NATURAL;
   }
 
   static UserVerificationStatus _parseStatus(Map<String, dynamic> map) {

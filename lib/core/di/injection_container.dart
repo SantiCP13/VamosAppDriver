@@ -53,7 +53,7 @@ Future<void> init() async {
 
     // Nuevos Módulos
     sl.registerLazySingleton<WalletRepository>(() => MockWalletRepository());
-    sl.registerLazySingleton<HistoryRepository>(() => ApiHistoryRepository());
+    sl.registerLazySingleton<HistoryRepository>(() => HistoryRepositoryImpl());
   } else {
     // --- API (Conexión real al Backend) ---
     sl.registerLazySingleton<DriverRepository>(() => ApiDriverRepository());
@@ -64,7 +64,7 @@ Future<void> init() async {
 
     // NOTA: Si aún no creas ApiHistoryRepository, usa el Mock temporalmente aquí
     // sl.registerLazySingleton<HistoryRepository>(() => ApiHistoryRepository());
-    sl.registerLazySingleton<HistoryRepository>(() => ApiHistoryRepository());
+    sl.registerLazySingleton<HistoryRepository>(() => HistoryRepositoryImpl());
   }
 
   // ---------------------------------------------------

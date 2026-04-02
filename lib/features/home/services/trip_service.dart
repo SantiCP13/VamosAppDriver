@@ -11,12 +11,11 @@ class TripService {
   /// Obtiene la Polyline real entre dos puntos
   Future<List<LatLng>> getRoutePolyline(LatLng start, LatLng end) async {
     try {
-      // Llamamos al servicio real de OSRM (o Google)
+      // 1. Llamamos al servicio de rutas (puedes usar el mismo RouteService que creamos para el usuario)
       final result = await _routeService.getRoute(start, end);
       return result.points;
     } catch (e) {
-      // Fallback simple en caso de error extremo: Línea recta
-      return [start, end];
+      return [start, end]; // Fallback
     }
   }
 }

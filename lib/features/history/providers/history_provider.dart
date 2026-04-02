@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../core/models/transaction_model.dart';
 import '../../../core/models/trip_model.dart';
 import '../domain/repositories/history_repository.dart';
 
@@ -8,14 +7,14 @@ class HistoryProvider extends ChangeNotifier {
 
   HistoryProvider({required this.repository});
 
-  List<TransactionModel> _history = [];
+  // CAMBIO: Ahora la lista es de tipo Trip
+  List<Trip> _history = [];
   bool _isLoading = false;
   bool _dataLoaded = false;
 
-  List<TransactionModel> get history => _history;
+  List<Trip> get history => _history;
   bool get isLoading => _isLoading;
 
-  // Agregamos forceRefresh para permitir el "Pull to Refresh"
   Future<void> loadHistory({bool forceRefresh = false}) async {
     if (_dataLoaded && !forceRefresh) return;
 
@@ -23,6 +22,7 @@ class HistoryProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Ahora los tipos coinciden: List<Trip>
       _history = await repository.getTripHistory();
       _dataLoaded = true;
     } catch (e) {
@@ -34,19 +34,8 @@ class HistoryProvider extends ChangeNotifier {
   }
 
   void addFinishedTrip(Trip trip) {
-    final newHistoryItem = TransactionModel(
-      id: trip.id,
-      ledgerId: "trip_${trip.id}",
-      title: "Viaje Finalizado",
-      description: "Destino: ${trip.destinationAddress}",
-      date: DateTime.now(),
-      amount: trip.price,
-      isCredit: true,
-      type: TransactionType.TRIP_PAYMENT,
-      referenceId: trip.id,
-    );
-
-    _history.insert(0, newHistoryItem);
+    // Simplemente insertamos el objeto Trip directamente
+    _history.insert(0, trip);
     _dataLoaded = true;
     notifyListeners();
   }

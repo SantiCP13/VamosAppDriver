@@ -1,9 +1,13 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // <--- Faltaba este
+
+// IMPORTANTE: Asegúrate de que estas rutas sean las correctas en tu carpeta lib
 import '../../../core/network/api_client.dart';
 import '../../../core/models/user_model.dart';
-import 'package:flutter/foundation.dart';
+import '../../../core/services/storage_service.dart'; // <--- Faltaba este
+import '../../../core/di/injection_container.dart';
 
 class DriverAuthService {
   static final DriverAuthService _instance = DriverAuthService._internal();
@@ -11,7 +15,6 @@ class DriverAuthService {
   DriverAuthService._internal();
 
   final ApiClient _apiClient = ApiClient();
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   User? _currentUser;
   User? get currentUser => _currentUser;
@@ -76,11 +79,10 @@ class DriverAuthService {
     }
 
     try {
-      final token = await _storage.read(key: 'auth_token');
+      // CAMBIO: Leer desde StorageService/SharedPreferences
+      final token = await sl<StorageService>().getToken();
 
-      if (token == null) {
-        return null; // No hay sesión guardada, ir a Login
-      }
+      if (token == null) return null;
 
       // Hacemos la petición a /me para validar si el token sigue vivo y el usuario activo
       final response = await _apiClient.dio.get(
@@ -242,56 +244,48 @@ class DriverAuthService {
     required String name,
     required String phone,
     required String email,
-    String? photoUrl,
+    File? imageFile, // Cambiamos photoUrl (String) por imageFile (File)
   }) async {
     await _apiClient.simulateDelay();
 
     if (_apiClient.isMockOnly) {
       if (_currentUser == null) return false;
-
-      // 1. Convertimos a mapa
       final Map<String, dynamic> userData = _currentUser!.toMap();
-
-      // 2. Inyectamos los cambios
       userData['name'] = name;
       userData['phone'] = phone;
       userData['email'] = email;
-      if (photoUrl != null) {
-        userData['photo_url'] = photoUrl;
-      }
-
-      // 3. Reconstruimos el usuario
       _currentUser = User.fromMap(userData);
-
-      debugPrint("MOCK UPDATE PROFILE: ${_currentUser!.name}");
       return true;
     }
 
     try {
-      // CORRECCIÓN DEL ERROR AQUÍ:
-      // Construimos el mapa fuera para evitar el lint "use_null_aware_elements" dentro del literal.
-      final Map<String, dynamic> updateData = {
+      // USAMOS FormData PARA ENVIAR ARCHIVOS (IGUAL QUE EN LA APP DE USUARIOS)
+      FormData formData = FormData.fromMap({
         'name': name,
         'phone': phone,
         'email': email,
-      };
+        if (imageFile != null)
+          'photo': await MultipartFile.fromFile(
+            imageFile.path,
+            filename: 'profile_driver.jpg',
+          ),
+      });
 
-      if (photoUrl != null) {
-        updateData['photo_url'] = photoUrl;
-      }
+      // CAMBIO CLAVE: POST a /me/update (la ruta que sí existe en api.php)
+      final response = await _apiClient.dio.post('/me/update', data: formData);
 
-      final response = await _apiClient.dio.put(
-        '/driver/profile',
-        data: updateData,
-      );
-
-      // Actualizamos el usuario local con la respuesta real del servidor
-      if (response.data['user'] != null) {
-        _currentUser = User.fromMap(response.data['user']);
+      // Sincronizamos con el formato de respuesta de tu backend
+      if (response.data['success'] == true ||
+          response.data['status'] == 'success') {
+        // Actualizamos el usuario local con lo que devuelve el server
+        if (response.data['user'] != null) {
+          _currentUser = User.fromMap(response.data['user']);
+        }
         return true;
       }
       return false;
     } on DioException catch (e) {
+      debugPrint("Error en DriverAuthService: ${e.response?.data}");
       throw Exception(
         e.response?.data['message'] ?? 'Error actualizando perfil',
       );
@@ -341,12 +335,21 @@ class DriverAuthService {
 
   // --- HELPERS ---
   Future<void> _saveSession(User user, String token) async {
-    await _storage.write(key: 'auth_token', value: token);
+    // USAMOS StorageService para que el token se guarde donde el Socket lo busca
+    await sl<StorageService>().saveToken(token);
     _currentUser = user;
   }
 
   Future<void> logout() async {
-    await _storage.delete(key: 'auth_token');
+    // En lugar de llamar a SharedPreferences aquí,
+    // usamos la función que ya creamos en nuestro servicio
+    await sl<StorageService>().clearCurrentTrip();
+
+    // Y para borrar el token, usamos SharedPreferences directamente o
+    // podrías añadir un método 'deleteToken' en StorageService.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+
     _currentUser = null;
   }
 

@@ -67,31 +67,63 @@ class TripPanelSheet extends StatelessWidget {
           ),
           const SizedBox(height: 15),
 
-          // 2. Cabecera: Estado + FUEC (Botones más grandes)
+          // 2. Cabecera: Estado + FUEC (Protegido contra Overflow)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: primaryColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(30),
-                  border: Border.all(
-                    color: primaryColor.withValues(alpha: 0.3),
+              // Lado Izquierdo: Etiqueta de Estado + Distancia
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
                   ),
-                ),
-                child: Text(
-                  _getStatusText(trip.status).toUpperCase(),
-                  style: GoogleFonts.poppins(
-                    color: primaryColor,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
+                  decoration: BoxDecoration(
+                    color: primaryColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(
+                      color: primaryColor.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          _getStatusText(trip.status).toUpperCase(),
+                          style: GoogleFonts.poppins(
+                            color: primaryColor,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 11,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        width: 4,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: primaryColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        provider.distanceToTarget,
+                        style: GoogleFonts.poppins(
+                          color: primaryColor,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
+
+              const SizedBox(width: 10), // Espacio de seguridad entre elementos
+              // Lado Derecho: Botón FUEC
               ElevatedButton.icon(
                 onPressed: () async {
                   if (trip.fuecUrl != null) {
@@ -107,12 +139,12 @@ class TripPanelSheet extends StatelessWidget {
                 },
                 icon: const Icon(
                   Icons.description,
-                  size: 18,
+                  size: 16,
                   color: Colors.white,
                 ),
                 label: const Text(
                   "VER FUEC",
-                  style: TextStyle(color: Colors.white),
+                  style: TextStyle(color: Colors.white, fontSize: 12),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey,
@@ -125,7 +157,6 @@ class TripPanelSheet extends StatelessWidget {
               ),
             ],
           ),
-
           const Divider(height: 30),
 
           // 3. Información del Cliente y Contacto
@@ -164,14 +195,14 @@ class TripPanelSheet extends StatelessWidget {
                     Row(
                       children: [
                         _ContactButton(
-                          icon: Icons.chat_bubble, // WhatsApp
+                          icon: Icons.chat_bubble,
                           color: const Color(0xFF25D366),
                           label: "Chat",
                           onTap: () {
-                            if (trip.passengers.isNotEmpty &&
-                                trip.passengers.first.phone != null) {
+                            // Si no hay pasajeros cargados, evitamos el crash
+                            if (trip.passengers.isNotEmpty) {
                               provider.launchWhatsApp(
-                                trip.passengers.first.phone!,
+                                trip.passengers.first.phone ?? "",
                               );
                             }
                           },
@@ -346,7 +377,17 @@ class TripPanelSheet extends StatelessWidget {
           const SizedBox(height: 10),
           Center(
             child: InkWell(
-              onTap: provider.openExternalNavigation,
+              onTap: () {
+                if (trip.destinationLocation.latitude != 0) {
+                  provider.openExternalNavigation();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("⚠️ Coordenadas de destino no disponibles"),
+                    ),
+                  );
+                }
+              },
               borderRadius: BorderRadius.circular(20),
               child: Padding(
                 padding: const EdgeInsets.all(8.0),

@@ -1,7 +1,8 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    id("dev.flutter.flutter-gradle-plugin")
+    // Aquí NO pongas versión, se hereda de settings.gradle.kts
+    id("dev.flutter.flutter-gradle-plugin") 
 }
 
 android {
@@ -21,13 +22,7 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID
         applicationId = "com.vamos.driver.vamos_driver"
-        
-        // --- CAMBIO IMPORTANTE AQUÍ ---
-        // flutter_secure_storage requiere mínimo SDK 18.
-        // Lo fijamos en 19 para asegurar estabilidad.
-        minSdk = flutter.minSdkVersion 
-        // ------------------------------
-
+        minSdk = flutter.minSdkVersion // Cambia flutter.minSdkVersion por 21
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

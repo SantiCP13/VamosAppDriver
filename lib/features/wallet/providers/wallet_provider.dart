@@ -12,13 +12,11 @@ class WalletProvider extends ChangeNotifier {
   List<TransactionModel> _transactions = [];
   bool _isLoading = false;
 
-  // NUEVO: Bandera para saber si ya cargamos los datos iniciales
-  bool _dataLoaded = false;
-
   double get balance => _balance;
   List<TransactionModel> get transactions => _transactions;
   bool get isLoading => _isLoading;
 
+  // Tu lógica original de filtrado local se mantiene
   double get todayEarnings {
     final now = DateTime.now();
     return _transactions
@@ -32,16 +30,14 @@ class WalletProvider extends ChangeNotifier {
         .fold(0.0, (sum, t) => sum + t.amount);
   }
 
-  Future<void> loadWalletData() async {
-    // CORRECCIÓN CRÍTICA:
-    // Si ya cargamos datos y tenemos transacciones en memoria, NO recargar del Mock.
-    // Esto evita que se borre el dinero que acabamos de ganar en el viaje.
-    if (_dataLoaded) return;
+  Future<void> loadWalletData({bool force = false}) async {
+    if (_isLoading) return;
 
     _isLoading = true;
     notifyListeners();
 
     try {
+      // Traemos saldo e historial en paralelo
       final results = await Future.wait([
         repository.getBalance(),
         repository.getHistory(),
@@ -49,9 +45,12 @@ class WalletProvider extends ChangeNotifier {
 
       _balance = results[0] as double;
       _transactions = results[1] as List<TransactionModel>;
-      _dataLoaded = true; // Marcamos como cargado
+
+      debugPrint(
+        "💰 Billetera actualizada: $_balance con ${_transactions.length} movimientos",
+      );
     } catch (e) {
-      debugPrint("Error loading wallet: $e");
+      debugPrint("❌ Error cargando billetera: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -59,18 +58,6 @@ class WalletProvider extends ChangeNotifier {
   }
 
   void registerCompletedTrip(Trip completedTrip) {
-    if (completedTrip.driverRevenue <= 0) {
-      debugPrint("⚠️ Advertencia: Viaje finalizado con ganancia 0 o nula.");
-    }
-
-    // 1. En lugar de sumar mágicamente, forzamos la sincronización con Laravel
-    _dataLoaded = false;
-
-    // 2. Descargamos el saldo real del Ledger
     loadWalletData();
-
-    // Nota: Aunque loadWalletData recarga la lista desde el server,
-    // puedes dejar el SnackBar de la UI tranquilo, ya que ahora
-    // dependemos de la verdad absoluta del Backend.
   }
 }

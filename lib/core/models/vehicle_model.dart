@@ -24,13 +24,20 @@ class Vehicle {
   factory Vehicle.fromJson(Map<String, dynamic> json) {
     return Vehicle(
       id: json['id'].toString(),
-      brand: json['marca'] ?? '',
-      model: json['modelo'] ?? '',
-      plate: json['placa'] ?? '',
-      color: json['color'] ?? '',
-      year: int.tryParse(json['anio'].toString()) ?? 2020,
-      capacity: int.tryParse(json['capacidad'].toString()) ?? 4,
-      isActive: json['activo'] == true || json['activo'] == 1,
+      brand: json['marca'] ?? '', // 'marca' en BD
+      model: json['modelo'] ?? '', // 'modelo' en BD
+      plate: json['placa'] ?? '', // 'placa' en BD
+      color: json['color'] ?? 'N/A',
+      year:
+          int.tryParse(json['year'].toString()) ??
+          2024, // Parseo de String a int
+      capacity:
+          int.tryParse(json['capacidad'].toString()) ??
+          4, // Parseo de String a int
+      isActive:
+          json['activo'] == true ||
+          json['activo'] == 1 ||
+          json['activo'] == '1',
     );
   }
 

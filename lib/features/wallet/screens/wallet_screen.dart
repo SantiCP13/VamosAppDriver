@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-// Importamos la Lógica
 import '../providers/wallet_provider.dart';
-// Importamos los Widgets visuales (Asegúrate de haberlos creado como te pasé antes)
 import '../widgets/balance_card.dart';
 import '../widgets/transaction_list_item.dart';
 
@@ -17,24 +16,32 @@ class _WalletScreenState extends State<WalletScreen> {
   @override
   void initState() {
     super.initState();
-    // Carga los datos apenas se abre la pantalla
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<WalletProvider>().loadWalletData();
+      if (mounted) {
+        context.read<WalletProvider>().loadWalletData();
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // Escucha cambios en el proveedor
     final wallet = context.watch<WalletProvider>();
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Colors.white, // Fondo blanco igual al menú/perfil
       appBar: AppBar(
-        title: const Text("Billetera"),
+        title: Text(
+          "Mi Billetera",
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: Colors.black,
+            fontSize: 18,
+          ),
+        ),
+        centerTitle: true,
         elevation: 0,
         backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        leading: const BackButton(color: Colors.black),
       ),
       body: wallet.isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -42,7 +49,10 @@ class _WalletScreenState extends State<WalletScreen> {
               onRefresh: () => context.read<WalletProvider>().loadWalletData(),
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 10,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -51,24 +61,28 @@ class _WalletScreenState extends State<WalletScreen> {
                       balance: wallet.balance,
                       todayEarnings: wallet.todayEarnings,
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 35),
 
-                    // Título Historial
-                    const Text(
-                      "Historial Reciente",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                    // Título Historial (Mismo estilo que "Información Personal" del perfil)
+                    Text(
+                      "HISTORIAL DE MOVIMIENTOS",
+                      style: GoogleFonts.poppins(
+                        color: Colors.grey.shade500,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        letterSpacing: 1.1,
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 15),
 
-                    // Lista de Transacciones
                     if (wallet.transactions.isEmpty)
-                      const Center(
+                      Center(
                         child: Padding(
-                          padding: EdgeInsets.all(20.0),
-                          child: Text("No hay movimientos aún"),
+                          padding: const EdgeInsets.symmetric(vertical: 40),
+                          child: Text(
+                            "No hay movimientos registrados",
+                            style: GoogleFonts.poppins(color: Colors.grey),
+                          ),
                         ),
                       )
                     else
@@ -76,13 +90,15 @@ class _WalletScreenState extends State<WalletScreen> {
                         physics: const NeverScrollableScrollPhysics(),
                         shrinkWrap: true,
                         itemCount: wallet.transactions.length,
-                        separatorBuilder: (context, index) => const Divider(),
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(height: 12),
                         itemBuilder: (context, index) {
                           return TransactionListItem(
                             transaction: wallet.transactions[index],
                           );
                         },
                       ),
+                    const SizedBox(height: 40),
                   ],
                 ),
               ),

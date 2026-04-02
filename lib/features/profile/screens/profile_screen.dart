@@ -2,12 +2,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:provider/provider.dart'; // NECESARIO
+import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
-// Eliminamos import directo del servicio: import '../../auth/services/driver_auth_service.dart';
-import '../../auth/providers/auth_provider.dart'; // Usamos el Provider
+import '../../auth/providers/auth_provider.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -43,8 +42,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // Cargamos los datos iniciales desde el Provider
-    // Usamos listen: false porque initState no puede escuchar cambios
     final user = context.read<AuthProvider>().user;
     _nameController = TextEditingController(text: user?.name ?? '');
     _phoneController = TextEditingController(text: user?.phone ?? '');
@@ -62,40 +59,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
-  // --- LÓGICA DE NEGOCIO ACTUALIZADA ---
-
   Future<void> _saveChanges() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
     FocusScope.of(context).unfocus();
     setState(() => _isLoading = true);
 
     try {
       final authProvider = context.read<AuthProvider>();
-
-      // 1. Subir Foto (Si cambió)
-
-      if (_imageFile != null) {
-        // Asumiendo que agregas este método en tu AuthProvider o lo expones del servicio
-        // Por ahora accedemos al servicio a través del provider si es público o agregamos el método en el provider
-        // Opción Rápida: Exponer el servicio desde el provider o crear método en provider
-        // Aquí asumiré que agregaste updateProfile al AuthProvider (ver punto 3 abajo)
-        await authProvider.updateProfileData(
-          name: _nameController.text.trim(),
-          phone: _phoneController.text.trim(),
-          email: _emailController.text.trim(),
-          imageFile: _imageFile,
-        );
-      } else {
-        await authProvider.updateProfileData(
-          name: _nameController.text.trim(),
-          phone: _phoneController.text.trim(),
-          email: _emailController.text.trim(),
-        );
-      }
+      await authProvider.updateProfileData(
+        name: _nameController.text.trim(),
+        phone: _phoneController.text.trim(),
+        email: _emailController.text.trim(),
+        imageFile: _imageFile,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Perfil actualizado correctamente")),
+          const SnackBar(
+            content: Text("Perfil actualizado correctamente"),
+            backgroundColor: AppColors.primaryGreen,
+          ),
         );
         setState(() {
           _isNameEditable = false;
@@ -111,46 +96,68 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
-  // ... (El resto de _showImagePickerOptions y _pickImage queda igual) ...
   void _showImagePickerOptions() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: Text("Tomar foto", style: GoogleFonts.poppins()),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.camera);
-                },
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Text(
+                "Cambiar foto de perfil",
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              ListTile(
-                leading: const Icon(Icons.photo_library),
-                title: Text("Galería", style: GoogleFonts.poppins()),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.gallery);
-                },
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Colors.grey,
+                child: Icon(Icons.camera_alt, color: Colors.white),
               ),
-            ],
-          ),
-        );
-      },
+              title: Text("Tomar foto (Cámara)", style: GoogleFonts.poppins()),
+              onTap: () {
+                Navigator.pop(context);
+                _pickImage(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Colors.grey,
+                child: Icon(Icons.photo_library, color: Colors.white),
+              ),
+              title: Text("Galería", style: GoogleFonts.poppins()),
+              onTap: () {
+                Navigator.pop(context);
+                _pickImage(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Future<void> _pickImage(ImageSource source) async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source, maxWidth: 800);
+    final pickedFile = await picker.pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 800,
+    );
     if (pickedFile != null) {
       setState(() => _imageFile = File(pickedFile.path));
     }
@@ -158,16 +165,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Usamos Consumer para escuchar cambios en el usuario en tiempo real
     return Consumer<AuthProvider>(
       builder: (context, authProvider, child) {
         final user = authProvider.user;
-
         if (user == null) {
-          return Scaffold(
-            appBar: AppBar(),
-            body: const Center(child: Text("Sesión no válida")),
-          );
+          return const Scaffold(body: Center(child: Text("Cargando...")));
         }
 
         return Scaffold(
@@ -189,8 +191,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextButton(
                   onPressed: _isLoading ? null : _saveChanges,
                   child: _isLoading
-                      ? const Padding(
-                          padding: EdgeInsets.all(8.0),
+                      ? const SizedBox(
+                          width: 15,
+                          height: 15,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : Text(
@@ -204,25 +207,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           body: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
             child: Form(
               key: _formKey,
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildAvatarSection(user), // Pasamos el usuario
+                  const SizedBox(height: 10),
+                  _buildAvatarSection(user),
                   const SizedBox(height: 30),
-                  // Campos...
+                  Text(
+                    "Información del Conductor",
+                    style: GoogleFonts.poppins(
+                      color: Colors.grey.shade500,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   _buildEditableField(
                     _nameController,
                     _nameFocus,
-                    "Nombre",
+                    "Nombre Completo",
                     Icons.person_outline,
                     _isNameEditable,
                     () {
-                      setState(() {
-                        _isNameEditable = true;
-                        _nameFocus.requestFocus();
-                      });
+                      setState(() => _isNameEditable = true);
+                      _nameFocus.requestFocus();
                     },
                   ),
                   const SizedBox(height: 15),
@@ -233,10 +244,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Icons.phone_android,
                     _isPhoneEditable,
                     () {
-                      setState(() {
-                        _isPhoneEditable = true;
-                        _phoneFocus.requestFocus();
-                      });
+                      setState(() => _isPhoneEditable = true);
+                      _phoneFocus.requestFocus();
                     },
                     TextInputType.phone,
                   ),
@@ -244,21 +253,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _buildEditableField(
                     _emailController,
                     _emailFocus,
-                    "Correo",
+                    "Correo Electrónico",
                     Icons.email_outlined,
                     _isEmailEditable,
                     () {
-                      setState(() {
-                        _isEmailEditable = true;
-                        _emailFocus.requestFocus();
-                      });
+                      setState(() => _isEmailEditable = true);
+                      _emailFocus.requestFocus();
                     },
                     TextInputType.emailAddress,
                   ),
-
-                  // ... Resto de widgets (Estado de cuenta, etc) ...
                   const SizedBox(height: 30),
-                  _buildStatusCard(user), // Extraído a método
+                  _buildReadOnlyTile(
+                    icon: Icons.verified_user_outlined,
+                    title: _getStatusText(user.verificationStatus),
+                    subtitle: "Estado de la cuenta",
+                    color: _getStatusColor(user.verificationStatus),
+                    bgColor: _getStatusColor(
+                      user.verificationStatus,
+                    ).withValues(alpha: 0.1),
+                  ),
+                  const SizedBox(height: 40),
                 ],
               ),
             ),
@@ -276,104 +290,102 @@ class _ProfileScreenState extends State<ProfileScreen> {
       imageProvider = NetworkImage(user.photoUrl!);
     }
 
-    return Stack(
-      children: [
-        CircleAvatar(
-          radius: 60,
-          backgroundColor: Colors.grey.shade200,
-          backgroundImage: imageProvider,
-          child: imageProvider == null
-              ? Text(
-                  user.name.isNotEmpty ? user.name[0] : "U",
-                  style: const TextStyle(fontSize: 40),
-                )
-              : null,
-        ),
-        Positioned(
-          bottom: 0,
-          right: 0,
-          child: GestureDetector(
-            onTap: _showImagePickerOptions,
-            child: const CircleAvatar(
-              radius: 18,
-              backgroundColor: AppColors.primaryGreen,
-              child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Helper simple para la tarjeta de estado
-  Widget _buildStatusCard(User user) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
+    return Center(
+      child: Stack(
         children: [
-          Icon(
-            Icons.verified_user,
-            color: user.verificationStatus == UserVerificationStatus.VERIFIED
-                ? Colors.green
-                : Colors.orange,
+          Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.grey.shade200,
+              image: imageProvider != null
+                  ? DecorationImage(image: imageProvider, fit: BoxFit.cover)
+                  : null,
+              border: Border.all(color: Colors.white, width: 4),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 10,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: imageProvider == null
+                ? Center(
+                    child: Text(
+                      user.name.isNotEmpty ? user.name[0].toUpperCase() : "C",
+                      style: GoogleFonts.poppins(
+                        fontSize: 40,
+                        color: Colors.grey.shade400,
+                      ),
+                    ),
+                  )
+                : null,
           ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Estado de Cuenta",
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: GestureDetector(
+              onTap: _showImagePickerOptions,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: AppColors.primaryGreen,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.camera_alt,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
-              Text(
-                user.verificationStatus == UserVerificationStatus.VERIFIED
-                    ? "Verificado"
-                    : "En Revisión",
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ... (Tu método _buildEditableField original sigue igual)
   Widget _buildEditableField(
-    TextEditingController ctrl,
-    FocusNode node,
+    TextEditingController controller,
+    FocusNode focusNode,
     String label,
     IconData icon,
     bool isEditable,
-    VoidCallback onEdit, [
-    TextInputType type = TextInputType.text,
+    VoidCallback onEditPressed, [
+    TextInputType keyboardType = TextInputType.text,
   ]) {
     return TextFormField(
-      controller: ctrl,
-      focusNode: node,
+      controller: controller,
+      focusNode: focusNode,
       readOnly: !isEditable,
-      keyboardType: type,
-      style: GoogleFonts.poppins(color: Colors.black87),
+      keyboardType: keyboardType,
+      style: GoogleFonts.poppins(
+        fontSize: 15,
+        color: isEditable ? Colors.black87 : Colors.grey.shade700,
+      ),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: GoogleFonts.poppins(color: Colors.grey),
+        labelStyle: GoogleFonts.poppins(color: Colors.grey.shade600),
         prefixIcon: Icon(
           icon,
           color: isEditable ? AppColors.primaryGreen : Colors.grey,
+          size: 22,
         ),
         suffixIcon: !isEditable
             ? IconButton(
-                icon: const Icon(Icons.edit, size: 20, color: Colors.grey),
-                onPressed: onEdit,
+                icon: const Icon(
+                  Icons.edit_outlined,
+                  color: AppColors.primaryGreen,
+                  size: 20,
+                ),
+                onPressed: onEditPressed,
               )
             : null,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade300),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 16,
+          horizontal: 20,
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -386,7 +398,81 @@ class _ProfileScreenState extends State<ProfileScreen> {
         filled: true,
         fillColor: isEditable ? Colors.white : Colors.grey.shade50,
       ),
-      validator: (v) => v!.isEmpty ? "Requerido" : null,
+      validator: (v) => v!.isEmpty ? "Campo requerido" : null,
     );
+  }
+
+  Widget _buildReadOnlyTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required Color bgColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  subtitle,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Colors.grey.shade500,
+                  ),
+                ),
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.lock_outline, size: 16, color: Colors.grey.shade400),
+        ],
+      ),
+    );
+  }
+
+  String _getStatusText(UserVerificationStatus status) {
+    if (status == UserVerificationStatus.VERIFIED) {
+      return "Verificado";
+    } else if (status == UserVerificationStatus.UNDER_REVIEW) {
+      return "En Revisión";
+    } else if (status == UserVerificationStatus.REJECTED) {
+      return "Rechazado";
+    } else {
+      return "Pendiente";
+    }
+  }
+
+  Color _getStatusColor(UserVerificationStatus status) {
+    if (status == UserVerificationStatus.VERIFIED) {
+      return AppColors.primaryGreen;
+    } else if (status == UserVerificationStatus.UNDER_REVIEW) {
+      return Colors.orange;
+    } else if (status == UserVerificationStatus.REJECTED) {
+      return Colors.red;
+    } else {
+      return Colors.grey;
+    }
   }
 }

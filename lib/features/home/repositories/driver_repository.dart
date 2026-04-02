@@ -1,17 +1,19 @@
 import '../../../core/models/document_model.dart';
-import '../../../core/models/vehicle_model.dart'; // <--- Importar
+import '../../../core/models/vehicle_model.dart';
 
 abstract class DriverRepository {
-  /// Obtiene la lista de documentos (SOAT, Tecno, etc.)
   Future<List<DriverDocument>> getDocuments(String driverId);
-
-  /// NUEVO: Obtiene los vehículos asignados al conductor
   Future<List<Vehicle>> getAssignedVehicles(String driverId);
 
-  /// ACTUALIZADO: toggleStatus ahora requiere vehicleId si se va a poner ONLINE
+  // Agregamos lat y lng aquí para que coincida con el backend
   Future<bool> toggleStatus({
     required bool isOnline,
     required String driverId,
-    String? vehicleId, // <--- Dato obligatorio para generar FUEC
+    String? vehicleId,
+    double? lat,
+    double? lng,
   });
+
+  // Este es el método que faltaba implementar
+  Future<void> updatePosition(double lat, double lng);
 }

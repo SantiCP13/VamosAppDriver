@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
+import 'package:dart_pusher_channels/dart_pusher_channels.dart'; // <--- NUEVA LIBRERÍA
 import '../../../core/enums/payment_enums.dart';
 
 class PaymentSocketService {
@@ -10,10 +10,9 @@ class PaymentSocketService {
   final _paymentController = StreamController<PaymentStatus>.broadcast();
   Stream<PaymentStatus> get paymentStream => _paymentController.stream;
 
-  PusherChannelsFlutter? _pusher;
-  String? _currentChannel;
+  PusherChannelsClient? _client;
+  StreamSubscription? _subscription;
 
-  /// Método principal: Decide si usar simulación o conexión real
   Future<void> connectToTripPayment(String tripId, {String? methodName}) async {
     if (useMock) {
       _simulateWaitingForPayment(tripId, methodName ?? "Digital");
@@ -21,73 +20,51 @@ class PaymentSocketService {
     }
 
     // =========================================================
-    // LÓGICA REAL PARA LARAVEL (PUSHER / REVERB)
+    // LÓGICA REAL PARA LARAVEL (PURO DART)
     // =========================================================
     try {
-      _currentChannel = "trip.$tripId";
-      _pusher = PusherChannelsFlutter.getInstance();
-
-      debugPrint(
-        "🔌 SOCKET: Iniciando conexión a Pusher/Reverb para viaje $tripId...",
+      final options = PusherChannelsOptions.fromHost(
+        scheme: 'ws',
+        host: '10.0.2.2',
+        port: 8080,
+        key: '06exymiubefjjglwmvqe',
       );
 
-      await _pusher!.init(
-        apiKey: "TU_PUSHER_APP_KEY", // Te lo dará el Backend (del archivo .env)
-        cluster: "TU_PUSHER_CLUSTER", // Te lo dará el Backend
-        // authEndpoint: "https://tu-api.com/api/broadcasting/auth", // Si usan canales privados
-        onConnectionStateChange: (currentState, previousState) {
-          debugPrint("🔄 SOCKET Estado: $currentState");
-        },
-        onError: (message, code, error) {
-          debugPrint("❌ SOCKET Error: $message");
-        },
-        onEvent: (event) {
-          debugPrint("🔔 SOCKET Evento recibido: ${event.eventName}");
-
-          // Escuchamos el evento de Laravel
-          if (event.eventName == "PaymentApprovedEvent" ||
-              event.eventName == "App\\Events\\PaymentApprovedEvent") {
-            debugPrint("✅ SOCKET REAL: ¡Pago confirmado por el backend!");
-            _paymentController.add(PaymentStatus.APPROVED);
-          }
+      // 🔥 CORRECCIÓN: Se añade el manejador de errores obligatorio
+      _client = PusherChannelsClient.websocket(
+        options: options,
+        connectionErrorHandler: (exception, trace, client) {
+          debugPrint("❌ SOCKET PAGO Error: $exception");
         },
       );
 
-      await _pusher!.subscribe(channelName: _currentChannel!);
-      await _pusher!.connect();
-      debugPrint(
-        "✅ SOCKET: Suscrito y escuchando en el canal $_currentChannel",
-      );
+      final channel = _client!.publicChannel("trip.$tripId");
+
+      _subscription = channel.bind("PaymentApprovedEvent").listen((event) {
+        debugPrint("✅ SOCKET REAL: ¡Pago confirmado!");
+        _paymentController.add(PaymentStatus.APPROVED);
+      });
+
+      _client!.connect();
+      debugPrint("🔌 SOCKET: Escuchando pago de viaje $tripId...");
     } catch (e) {
-      debugPrint("❌ SOCKET Error de inicialización: $e");
+      debugPrint("❌ SOCKET Error: $e");
     }
   }
 
-  // =========================================================
-  // LÓGICA MOCK (SIMULACIÓN PARA DESARROLLO)
-  // =========================================================
   void _simulateWaitingForPayment(String tripId, String methodName) {
-    // <--- Recibe el método
     debugPrint("🛠️ MOCK SOCKET: Simulando conexión al viaje $tripId...");
-    debugPrint(
-      "⏳ MOCK SOCKET: Esperando 4 segundos para aprobar pago vía...",
-    ); // <--- LOG MEJORADO
-
     Future.delayed(const Duration(seconds: 4), () {
-      debugPrint(
-        "✅ MOCK SOCKET: ¡Evento PAYMENT_APPROVED simulado para $methodName!",
-      );
+      debugPrint("✅ MOCK SOCKET: ¡Pago aprobado!");
       if (!_paymentController.isClosed) {
         _paymentController.add(PaymentStatus.APPROVED);
       }
     });
   }
 
-  void dispose() async {
-    if (!useMock && _pusher != null && _currentChannel != null) {
-      await _pusher!.unsubscribe(channelName: _currentChannel!);
-      await _pusher!.disconnect();
-    }
+  void dispose() {
+    _subscription?.cancel();
+    _client?.disconnect();
     _paymentController.close();
   }
 }

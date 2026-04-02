@@ -72,6 +72,27 @@ class HomeProvider extends ChangeNotifier {
   List<Vehicle> get myVehicles => _myVehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
 
+  // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
+  String get distanceToTarget {
+    if (_currentPosition == null || _activeTrip == null) return "---";
+
+    const Distance distance = Distance();
+
+    // Punto objetivo: Si voy a recoger -> Origen. Si ya inicié -> Destino.
+    LatLng target =
+        (_activeTrip!.status == TripStatus.ACCEPTED ||
+            _activeTrip!.status == TripStatus.ARRIVED)
+        ? _activeTrip!.originLocation
+        : _activeTrip!.destinationLocation;
+
+    double meterDist = distance.as(LengthUnit.Meter, _currentPosition!, target);
+
+    if (meterDist < 1000) {
+      return "${meterDist.toStringAsFixed(0)} m";
+    } else {
+      return "${(meterDist / 1000).toStringAsFixed(1)} km";
+    }
+  }
   // =======================================================
   // A. INICIALIZACIÓN Y GPS
   // =======================================================
@@ -79,7 +100,15 @@ class HomeProvider extends ChangeNotifier {
   Future<void> initLocation() async {
     _isLoading = true;
     notifyListeners();
+    await loadVehicles();
 
+    final user = sl<AuthProvider>().user;
+    if (user != null) {
+      // Carga inicial de datos
+      sl<WalletProvider>().loadWalletData();
+      // Encendemos el monitor de la billetera (independiente de si está Online)
+      _startListeningWalletUpdates(user.id);
+    }
     // 1. Recuperar viaje persistido (si la app se cerró)
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
@@ -121,11 +150,12 @@ class HomeProvider extends ChangeNotifier {
         newLocation,
       );
 
-      if (dist > 2.0 && pos.heading > 0) {
-        _currentHeading = pos.heading;
+      // 1. Si está ONLINE pero NO está en un viaje, enviar "Heartbeat" de disponibilidad
+      if (_isOnline && _activeTrip == null && dist > 10.0) {
+        _driverRepository.updatePosition(pos.latitude, pos.longitude);
       }
 
-      // NUEVO: Tracking en tiempo real al backend si estamos en viaje (cada 10-15 metros aprox)
+      // 2. Si está en un VIAJE ACTIVO, enviar tracking para el pasajero (PuntoTrackingEvent)
       if (_activeTrip?.status == TripStatus.STARTED && dist > 15.0) {
         _tripRepository.updateLocation(
           _activeTrip!.id,
@@ -133,29 +163,45 @@ class HomeProvider extends ChangeNotifier {
           pos.longitude,
         );
       }
+
+      if (dist > 2.0 && pos.heading > 0) {
+        _currentHeading = pos.heading;
+      }
     }
+
     _currentPosition = newLocation;
     notifyListeners();
   }
-
   // =======================================================
   // B. GESTIÓN DE VEHÍCULOS (REQUISITO FUEC)
   // =======================================================
 
   Future<void> loadVehicles() async {
-    if (_myVehicles.isNotEmpty) return;
+    // BORRA O COMENTA ESTA LÍNEA:
+    // if (_myVehicles.isNotEmpty) return;
+
     try {
-      // Usar ID real del conductor autenticado
-      final String userId = sl<AuthProvider>().user?.id ?? "1";
+      _isLoading = true;
+      _myVehicles =
+          []; // 🔥 LIMPIEZA: Forzamos que la lista se vacíe un instante
+      notifyListeners();
+      final String userId = sl<AuthProvider>().user?.id ?? "0";
       _myVehicles = await _driverRepository.getAssignedVehicles(userId);
 
-      // Si solo tiene uno, seleccionarlo por defecto
-      if (_myVehicles.length == 1) {
-        _selectedVehicle = _myVehicles.first;
+      // Si el vehículo seleccionado ya no está en la lista (lo desactivaste en admin)
+      if (_selectedVehicle != null &&
+          !_myVehicles.any((v) => v.id == _selectedVehicle!.id)) {
+        _selectedVehicle = _myVehicles.isNotEmpty ? _myVehicles.first : null;
+        if (_isOnline && _selectedVehicle == null) {
+          toggleOnlineStatus(); // Lo desconectamos por seguridad si ya no tiene auto
+        }
       }
+
+      _isLoading = false;
       notifyListeners();
     } catch (e) {
-      debugPrint("Error cargando vehículos: $e");
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
@@ -187,7 +233,6 @@ class HomeProvider extends ChangeNotifier {
   Future<String?> toggleOnlineStatus() async {
     if (_isLoading) return null;
 
-    // Regla: Vehículo seleccionado es obligatorio para generar FUEC
     if (!_isOnline && _selectedVehicle == null) {
       return "⚠️ Debes seleccionar un vehículo para generar el FUEC.";
     }
@@ -196,16 +241,20 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Regla: Documentos vigentes
+      // 1. Validar documentos antes de intentar conectar (Usamos la función huérfana)
       if (!_isOnline) {
         await _checkDocumentsValidity();
       }
 
-      final String userId = sl<AuthProvider>().user?.id ?? "1";
+      final String userId = sl<AuthProvider>().user?.id ?? "0";
+
+      // 2. Llamada al repo con todos los parámetros corregidos
       await _driverRepository.toggleStatus(
         isOnline: !_isOnline,
         driverId: userId,
-        vehicleId: _selectedVehicle?.id,
+        vehicleId: _selectedVehicle?.id, // Aquí ya no habrá error de String/int
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
       );
 
       _isOnline = !_isOnline;
@@ -220,8 +269,6 @@ class HomeProvider extends ChangeNotifier {
       }
       return null;
     } catch (e) {
-      debugPrint("❌ BLOQUEO OPERATIVO: $e");
-      _isOnline = false;
       return e.toString().replaceAll("Exception: ", "");
     } finally {
       _isLoading = false;
@@ -232,11 +279,24 @@ class HomeProvider extends ChangeNotifier {
   // =======================================================
   // D. GESTIÓN DE VIAJES (CICLO DE VIDA)
   // =======================================================
+  void _startListeningWalletUpdates(String userId) {
+    _tripRepository.listenForWalletUpdates(userId).listen((nuevoSaldo) {
+      debugPrint(
+        "💰 [REAL-TIME] Señal de billetera recibida. Saldo: $nuevoSaldo",
+      );
+
+      // Esto actualizará el Side Menu y la Wallet Screen al instante
+      sl<WalletProvider>().loadWalletData(force: true);
+    });
+  }
 
   void _startListeningTrips() {
     _tripSubscription?.cancel();
+
+    // Aquí solo dejamos la escucha de viajes (Ofertas),
+    // porque esto sí solo debe ocurrir cuando el conductor está Online.
     _tripSubscription = _tripRepository.listenForTrips().listen((trip) {
-      if (_activeTrip != null) return; // Si ya tengo viaje, ignoro ofertas
+      if (_activeTrip != null) return;
       _incomingTrip = trip;
       notifyListeners();
     });
@@ -249,27 +309,27 @@ class HomeProvider extends ChangeNotifier {
   }
 
   Future<void> acceptIncomingTrip() async {
-    if (_incomingTrip == null) return;
+    if (_incomingTrip == null || _currentPosition == null) return;
+
     _isLoading = true;
     notifyListeners();
 
     try {
-      final acceptedTrip = await _tripRepository.acceptTrip(_incomingTrip!.id);
+      // 🔥 CAMBIO CLAVE: Usamos assignmentId si existe, sino usamos el id
+      final idParaResponder = _incomingTrip!.assignmentId ?? _incomingTrip!.id;
 
-      // --- VALIDACIÓN CRÍTICA FUEC ---
-      if (acceptedTrip.fuecUrl == null) {
-        await _tripRepository.updateTripStatus(acceptedTrip.id, "CANCELLED");
-        throw Exception(
-          "FUEC no generado por la plataforma. Viaje cancelado por seguridad.",
-        );
-      }
+      final acceptedTrip = await _tripRepository.acceptTrip(
+        idParaResponder, // <--- Ahora enviará "8" y no "34"
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+      );
 
       _activeTrip = acceptedTrip;
       _incomingTrip = null;
       await _storageService.saveCurrentTrip(_activeTrip!);
       await _calculateRouteForCurrentStatus();
     } catch (e) {
-      debugPrint("Error aceptando viaje: $e");
+      debugPrint("Error: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -423,6 +483,9 @@ class HomeProvider extends ChangeNotifier {
       final updatedTrip = await _tripRepository.updateTripStatus(
         _activeTrip!.id,
         statusName,
+        // 🔥 AQUÍ PASAMOS EL GPS ACTUAL DEL EMULADOR
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
       );
       _activeTrip = updatedTrip;
       await _storageService.saveCurrentTrip(_activeTrip!);
@@ -506,23 +569,24 @@ class HomeProvider extends ChangeNotifier {
     if (_activeTrip == null || _currentPosition == null) return;
 
     LatLng? destination;
-    // Si voy a recoger -> Destino es Origen del Pasajero
-    if (_activeTrip!.status == TripStatus.ACCEPTED) {
-      destination = _activeTrip!.originLocation;
+
+    // 🚩 Si voy a buscar al pasajero o ya estoy ahí esperando:
+    if (_activeTrip!.status == TripStatus.ACCEPTED ||
+        _activeTrip!.status == TripStatus.ARRIVED) {
+      destination = _activeTrip!.originLocation; // Punto de recogida
     }
-    // Si voy en viaje -> Destino es Destino del Pasajero
+    // 🚩 Si el pasajero ya subió y el viaje inició:
     else if (_activeTrip!.status == TripStatus.STARTED) {
-      destination = _activeTrip!.destinationLocation;
-    } else {
-      _routePoints = [];
-      return;
+      destination = _activeTrip!.destinationLocation; // Punto de destino
     }
 
-    _routePoints = await _tripService.getRoutePolyline(
-      _currentPosition!,
-      destination,
-    );
-    notifyListeners();
+    if (destination != null) {
+      _routePoints = await _tripService.getRoutePolyline(
+        _currentPosition!,
+        destination,
+      );
+      notifyListeners();
+    }
   }
 
   @override

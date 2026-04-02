@@ -6,7 +6,7 @@ class TransactionModel {
   final String id;
   final String ledgerId; // FK a MOVIMIENTOS_LEDGER
   final String title;
-  final String description; // Puede contener "Viaje #123"
+  final String description;
   final DateTime date;
   final double amount;
   final bool isCredit; // true = Entrada (+), false = Salida (-)
@@ -24,4 +24,25 @@ class TransactionModel {
     this.type = TransactionType.TRIP_PAYMENT,
     this.referenceId,
   });
+
+  // --- NUEVO: MÉTODO PARA CONECTAR CON LARAVEL ---
+  factory TransactionModel.fromMap(Map<String, dynamic> map) {
+    // Determinamos si es un ingreso o egreso según tu tabla movimientos_ledger
+    final bool ingreso = map['tipo'] == 'ingreso';
+
+    return TransactionModel(
+      id: map['id']?.toString() ?? '',
+      ledgerId: map['id_billetera']?.toString() ?? '',
+      title: ingreso ? 'Ingreso de Dinero' : 'Cobro / Salida',
+      description: map['descripcion'] ?? 'Movimiento de billetera',
+      amount: double.tryParse(map['monto'].toString()) ?? 0.0,
+      date: map['created_at'] != null
+          ? DateTime.parse(map['created_at'])
+          : DateTime.now(),
+      isCredit: ingreso,
+      // Mapeamos al Enum según el tipo
+      type: ingreso ? TransactionType.ADJUSTMENT : TransactionType.TRIP_PAYMENT,
+      referenceId: map['id_pago']?.toString(),
+    );
+  }
 }

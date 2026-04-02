@@ -1,194 +1,264 @@
+// ignore_for_file: use_null_aware_elements
+
 import 'dart:async';
-import 'package:flutter/foundation.dart'; // Para usar debugPrint
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+// IMPORTANTE: Estos 3 imports de Pusher son vitales para que no haya errores de tipo
+import 'package:dart_pusher_channels/dart_pusher_channels.dart';
+import 'package:dio/dio.dart';
+
+import '../../../core/di/injection_container.dart';
 import '../../../core/models/trip_model.dart';
-import '../../../core/network/api_client.dart'; // Si lo usas en la parte Real
+import '../../../core/network/api_client.dart';
+import '../../../core/services/storage_service.dart';
+import '../../auth/providers/auth_provider.dart';
 import 'trip_repository.dart';
-import 'package:latlong2/latlong.dart';
-import 'dart:math';
-import '../../../core/enums/payment_enums.dart';
 
-// --- MOCK ---
-// --- MOCK ---
-class MockTripRepository implements TripRepository {
-  final _streamController = StreamController<Trip>.broadcast();
+class ApiTripRepository implements TripRepository {
+  final ApiClient _api = ApiClient();
+  final StreamController<void> _fleetUpdateController =
+      StreamController<void>.broadcast();
+  final StreamController<double> _walletUpdateController =
+      StreamController<double>.broadcast();
 
-  // NUEVO: Guardamos el viaje actual en memoria para que no pierda
-  // su método de pago (Efectivo/Nequi) cuando cambie de estado.
-  Trip? _currentMockTrip;
-
-  MockTripRepository() {
-    // Genera una solicitud cada 10 seg
-    Timer.periodic(const Duration(seconds: 10), (timer) {
-      // FIX CLAVE: Solo enviamos ofertas si el conductor ESTÁ ONLINE (hasListener)
-      // y si no hay ya un viaje en pantalla esperando ser aceptado (_currentMockTrip == null).
-      if (!_streamController.isClosed &&
-          _streamController.hasListener &&
-          _currentMockTrip == null) {
-        debugPrint("📦 Enviando solicitud de viaje entrante...");
-
-        final methods = PaymentMethod.values;
-        final random = Random();
-        final randomMethod = methods[random.nextInt(methods.length)];
-
-        _currentMockTrip = Trip.mock().copyWith(
-          price: 15000.0,
-          originAddress: "Parque de la 93",
-          destinationAddress: "Centro Comercial Andino",
-          paymentMethod: randomMethod,
-        );
-
-        _streamController.add(_currentMockTrip!);
-      }
-    });
-  }
-  @override
-  Future<void> confirmCashPayment(String tripId) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    debugPrint("✅ Cobro manual confirmado en MOCK");
-  }
+  PusherChannelsClient? _client;
+  StreamSubscription? _eventSubscription;
 
   @override
-  Future<void> updateLocation(String tripId, double lat, double lng) async {}
+  Stream<void> listenForFleetChanges() => _fleetUpdateController.stream;
   @override
-  Stream<Trip> listenForTrips() {
-    return _streamController.stream;
-  }
+  Stream<double> listenForWalletUpdates(String userId) =>
+      _walletUpdateController.stream;
 
   @override
-  Future<Trip> acceptTrip(String tripId) async {
-    await Future.delayed(const Duration(seconds: 1));
-    debugPrint("✅ Aceptando viaje $tripId y generando FUEC...");
-
-    // AL ACEPTAR, actualizamos el viaje que ya tenemos en memoria (no creamos uno nuevo)
-    // Así conservamos el método de pago original
-    _currentMockTrip = (_currentMockTrip ?? Trip.mock()).copyWith(
-      id: tripId,
-      status: TripStatus.ACCEPTED,
-      price: 20000.0,
-      originLocation: const LatLng(4.6768, -74.0483),
-      destinationLocation: const LatLng(4.6668, -74.0526),
-      legalSnapshot: {
-        "fuec_number": "35002026001",
-        "generated_at": DateTime.now().toIso8601String(),
-        "contract": "CONTRATO_MARCO_2026",
-        "driver": "Pepito Pérez",
-        "vehicle": "Renault Kwid - AAA123",
+  Future<Trip> acceptTrip(String asignacionId, double lat, double lng) async {
+    final response = await _api.dio.post(
+      '/asignaciones/$asignacionId/responder',
+      data: {
+        'respuesta': 'aceptar',
+        'lat': lat, // ✅ Enviamos ubicación actual del conductor
+        'lng': lng,
       },
     );
 
-    return _currentMockTrip!;
-  }
-
-  @override
-  Future<void> rejectTrip(String tripId) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    debugPrint("🗑️ Viaje $tripId rechazado");
-    _currentMockTrip = null; // Liberamos memoria
-  }
-
-  @override
-  Future<Trip> updateTripStatus(String tripId, String status) async {
-    await Future.delayed(const Duration(seconds: 1));
-
-    final newStatus = TripStatus.values.byName(status);
-
-    double calculatedRevenue = 0.0;
-    double calculatedFee = 0.0;
-
-    // Asegurarnos de tener un viaje en memoria
-    _currentMockTrip ??= Trip.mock().copyWith(id: tripId, price: 20000.0);
-
-    if (newStatus == TripStatus.COMPLETED) {
-      // AQUÍ simulamos el Ledger de Laravel: 15% comisión
-      calculatedFee = _currentMockTrip!.price * 0.15;
-      calculatedRevenue = _currentMockTrip!.price - calculatedFee;
+    if (response.data['viaje'] != null) {
+      return Trip.fromMap(response.data['viaje']);
     }
-
-    // Actualizamos el estado y los valores financieros en el viaje de memoria
-    _currentMockTrip = _currentMockTrip!.copyWith(
-      status: newStatus,
-      driverRevenue: calculatedRevenue,
-      platformFee: calculatedFee,
-    );
-
-    // Si el viaje termina, guardamos el resultado final y limpiamos la memoria
-    // para que empiecen a llegar nuevas ofertas.
-    if (newStatus == TripStatus.COMPLETED ||
-        newStatus == TripStatus.CANCELLED) {
-      final finalResult = _currentMockTrip!;
-      _currentMockTrip = null;
-      return finalResult;
-    }
-
-    return _currentMockTrip!;
+    throw Exception("No se recibió el viaje");
   }
-}
-
-// --- REAL (LARAVEL) ---
-class ApiTripRepository implements TripRepository {
-  final ApiClient _apiClient = ApiClient();
-
-  // NUEVAS VARIABLES PARA EL POLLING CONTROLADO
-  final StreamController<Trip> _tripStreamController =
-      StreamController<Trip>.broadcast();
-  Timer? _pollingTimer;
 
   @override
   Stream<Trip> listenForTrips() {
-    // Apagamos cualquier polling anterior
-    _pollingTimer?.cancel();
-
-    // Polling optimizado cada 30 segundos (No bloquea el hilo principal)
-    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
-      try {
-        final response = await _apiClient.dio.get('/trips/available');
-        if (response.data != null) {
-          _tripStreamController.add(Trip.fromMap(response.data));
-        }
-      } catch (e) {
-        // Ignorar errores de red silenciosamente
-      }
-    });
-
-    return _tripStreamController.stream;
+    final user = sl<AuthProvider>().user;
+    if (user == null) return const Stream.empty();
+    final controller = StreamController<Trip>();
+    _initSocket(controller, user.id, sl<StorageService>());
+    return controller.stream;
   }
 
-  @override
-  Future<void> confirmCashPayment(String tripId) async {
-    await _apiClient.dio.post('/trips/$tripId/confirm-cash');
-  }
+  void _initSocket(
+    StreamController<Trip> controller,
+    String userId,
+    StorageService storage,
+  ) async {
+    debugPrint("🚀 INICIALIZANDO SOCKET PRIVADO PARA CONDUCTOR: $userId");
+    final token = await storage.getToken();
+    if (token == null) return;
 
-  @override
-  Future<void> updateLocation(String tripId, double lat, double lng) async {
     try {
-      await _apiClient.dio.post(
-        '/trips/$tripId/location',
-        data: {'lat': lat, 'lng': lng},
+      _client = PusherChannelsClient.websocket(
+        options: PusherChannelsOptions.fromHost(
+          scheme: 'ws',
+          host: '10.0.2.2', // IP para emulador
+          port: 8080,
+          key: '06exymiubefjjglwmvqe',
+        ),
+        // ✅ Quitamos el authorizationDelegate de aquí (error línea 67)
+        connectionErrorHandler: (exception, trace, client) =>
+            debugPrint("❌ Error Socket: $exception"),
       );
+
+      _client!.eventStream.listen((event) {
+        debugPrint("DEBUG PUSHER: Evento -> ${event.name}");
+
+        if (event.name == 'pusher:connection_established') {
+          debugPrint("✅ Conectado. Suscribiendo...");
+
+          // ✅ Lo ponemos AQUÍ (donde es obligatorio según el error de la línea 78)
+          final myChannel = _client!.privateChannel(
+            'private-conductor.$userId', // Nombre completo del canal
+            authorizationDelegate: MyPusherAuth(token: token, dio: Dio()),
+          );
+
+          myChannel.subscribe();
+
+          // Busca esta parte dentro de _initSocket en trip_repository_impl.dart
+          _eventSubscription = myChannel.bind('nueva.asignacion').listen((e) {
+            if (e.data != null) {
+              try {
+                final Map<String, dynamic> data = json.decode(e.data!);
+
+                // Obtenemos el ID de la asignación
+                final String assignmentId = data['asignacion']['id'].toString();
+
+                // Obtenemos los datos del viaje
+                final Map<String, dynamic> tripData =
+                    data['asignacion']['viaje'];
+
+                // 🔥 CAMBIO CLAVE: NO sobreescribas el ID del viaje.
+                // Guarda el ID de asignación en otra llave para usarla al aceptar.
+                tripData['assignment_id'] = assignmentId;
+
+                controller.add(Trip.fromMap(tripData));
+              } catch (ex) {
+                debugPrint("❌ Error: $ex");
+              }
+            }
+          });
+        }
+      });
+
+      _client!.connect();
     } catch (e) {
-      // Ignorar errores menores de tracking
+      debugPrint("🚨 Error: $e");
     }
   }
 
+  // Corregimos los avisos de las llaves {} en este método también
   @override
-  Future<Trip> acceptTrip(String tripId) async {
-    final response = await _apiClient.dio.post('/trips/$tripId/accept');
-    // El backend debe retornar el viaje actualizado CON el snapshot_legal
-    return Trip.fromMap(response.data['data']);
-  }
+  Future<Trip> updateTripStatus(
+    String tripId,
+    String status, {
+    double? lat,
+    double? lng,
+  }) async {
+    String? subPath;
 
-  @override
-  Future<void> rejectTrip(String tripId) async {
-    await _apiClient.dio.post('/trips/$tripId/reject');
-  }
+    // ✅ Corregido con llaves {} para eliminar el error de compilación
+    if (status == 'ARRIVED') {
+      subPath = '/llegada';
+    } else if (status == 'STARTED') {
+      subPath = '/iniciar';
+    } else if (status == 'DROPPED_OFF') {
+      // 🔥 CLAVE: Esta ruta traerá el precio real antes de cobrar
+      subPath = '/llegada-destino';
+    } else if (status == 'COMPLETED') {
+      subPath = '/finalizar';
+    }
 
-  @override
-  Future<Trip> updateTripStatus(String tripId, String status) async {
-    final response = await _apiClient.dio.patch(
-      '/trips/$tripId/status',
-      data: {'status': status},
+    if (subPath == null) {
+      return Trip.fromMap({'id': tripId, 'status': status});
+    }
+
+    final response = await _api.dio.post(
+      '/viajes/$tripId$subPath',
+      data: {
+        'metodo_pago': 'EFECTIVO',
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
+      },
     );
-    // Laravel debe retornar el objeto Trip con 'ganancia_conductor' calculado
-    return Trip.fromMap(response.data['data']);
+
+    // Verificamos que el servidor devuelva el objeto viaje completo
+    if (response.data['viaje'] == null) {
+      throw Exception(
+        "El servidor no devolvió los datos actualizados del viaje.",
+      );
+    }
+
+    return Trip.fromMap(response.data['viaje']);
   }
+
+  @override
+  Future<void> rejectTrip(String tripId) async => await _api.dio.post(
+    '/asignaciones/$tripId/responder',
+    data: {'respuesta': 'rechazar'},
+  );
+
+  @override
+  Future<void> updateLocation(String tripId, double lat, double lng) async =>
+      await _api.dio.post(
+        '/viajes/$tripId/tracking',
+        data: {'lat': lat, 'lng': lng},
+      );
+
+  @override
+  Future<void> confirmCashPayment(String tripId) async {}
+
+  void dispose() {
+    _eventSubscription?.cancel();
+    _client?.disconnect();
+    _fleetUpdateController.close();
+    _walletUpdateController.close();
+  }
+}
+
+// ESTA CLASE DEBE ESTAR EXACTAMENTE ASÍ PARA EVITAR ERRORES DE FIRMA
+class MyPusherAuth
+    implements
+        EndpointAuthorizableChannelAuthorizationDelegate<
+          PrivateChannelAuthorizationData
+        > {
+  final String token;
+  final Dio dio;
+
+  MyPusherAuth({required this.token, required this.dio});
+
+  @override
+  EndpointAuthFailedCallback? get onAuthFailed => (exception, trace) {
+    debugPrint("❌ Error de Autenticación Pusher: $exception");
+  };
+
+  @override
+  Future<PrivateChannelAuthorizationData> authorizationData(
+    String socketId,
+    String channelName,
+  ) async {
+    try {
+      final response = await dio.post(
+        'http://10.0.2.2:8000/api/broadcasting/auth',
+        data: {'socket_id': socketId, 'channel_name': channelName},
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+          },
+        ),
+      );
+      // Retornamos el formato que la librería espera
+      return PrivateChannelAuthorizationData(
+        authKey: response.data['auth'] ?? '',
+      );
+    } catch (e) {
+      debugPrint("❌ Falló la petición de auth: $e");
+      return const PrivateChannelAuthorizationData(authKey: '');
+    }
+  }
+}
+
+class MockTripRepository implements TripRepository {
+  @override
+  // ✅ ACTUALIZADO: Para que coincida con la interfaz
+  Future<Trip> acceptTrip(String asignacionId, double lat, double lng) async =>
+      throw UnimplementedError();
+
+  @override
+  Stream<Trip> listenForTrips() => const Stream.empty();
+  @override
+  Future<void> rejectTrip(String tripId) async {}
+  @override
+  Future<Trip> updateTripStatus(
+    String tripId,
+    String status, {
+    double? lat,
+    double? lng,
+  }) async => throw UnimplementedError();
+  @override
+  Future<void> updateLocation(String tripId, double lat, double lng) async {}
+  @override
+  Future<void> confirmCashPayment(String tripId) async {}
+  @override
+  Stream<void> listenForFleetChanges() => const Stream.empty();
+  @override
+  Stream<double> listenForWalletUpdates(String userId) => const Stream.empty();
 }

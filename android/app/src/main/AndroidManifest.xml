@@ -13,6 +13,7 @@
 
     <!-- CRÍTICO: Queries para saber si WhatsApp está instalado -->
     <queries>
+        <!-- Combinados todos los intents aquí -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
@@ -24,6 +25,10 @@
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="text/plain" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
     </queries>
@@ -31,6 +36,7 @@
         android:label="vamos_driver"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:fullBackupContent="false">
         

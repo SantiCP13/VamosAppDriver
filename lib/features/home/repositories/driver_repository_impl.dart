@@ -1,82 +1,76 @@
+// ignore_for_file: avoid_print, unused_import
+
 import 'dart:async';
-import 'package:dio/dio.dart';
+import 'package:dio/dio.dart'; // <--- IMPORTANTE: Esto quita el error de DioException
+import 'package:flutter/foundation.dart';
+import 'dart:developer' as developer;
+
 import '../../../core/models/document_model.dart';
 import '../../../core/models/vehicle_model.dart';
 import '../../../core/network/api_client.dart';
 import 'driver_repository.dart';
 
-// --- MOCK ---
+// ==========================================
+// 1. MOCK REPOSITORY (Para pruebas)
+// ==========================================
 class MockDriverRepository implements DriverRepository {
   @override
-  Future<List<DriverDocument>> getDocuments(String driverId) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    return [
-      DriverDocument(
-        id: '1',
-        name: 'SOAT',
-        expirationDate: DateTime.now().add(const Duration(days: 300)),
-        status: 'VIGENTE',
-      ),
-      DriverDocument(
-        id: '2',
-        name: 'Licencia de Conducción',
-        expirationDate: DateTime.now().add(const Duration(days: 15)),
-        status: 'VIGENTE',
-      ),
-    ];
-  }
+  Future<List<DriverDocument>> getDocuments(String driverId) async => [];
 
   @override
-  Future<List<Vehicle>> getAssignedVehicles(String driverId) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    // Retornamos la lista estática del modelo para probar
-    return Vehicle.getMocks();
-  }
+  Future<List<Vehicle>> getAssignedVehicles(String driverId) async =>
+      Vehicle.getMocks();
 
   @override
   Future<bool> toggleStatus({
     required bool isOnline,
     required String driverId,
     String? vehicleId,
+    double? lat,
+    double? lng,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 1000));
-
-    if (!isOnline) return true; // Desconectar siempre es gratis
-
-    // VALIDACIÓN DE NEGOCIO CRÍTICA
-    if (vehicleId == null) {
-      throw Exception("Debes seleccionar un vehículo para operar legalmente.");
-    }
-
-    // Simulamos validación de documentos
-    final docs = await getDocuments(driverId);
-    if (docs.any((d) => !d.isValid)) {
-      throw Exception("Documentación vencida. No se puede generar FUEC.");
-    }
-
+    await Future.delayed(const Duration(seconds: 1));
     return true;
   }
+
+  @override
+  Future<void> updatePosition(double lat, double lng) async {}
 }
 
-// --- REAL (LARAVEL) ---
+// ==========================================
+// 2. API REPOSITORY (Conexión Real Laravel)
+// ==========================================
 class ApiDriverRepository implements DriverRepository {
   final ApiClient _apiClient = ApiClient();
 
   @override
   Future<List<DriverDocument>> getDocuments(String driverId) async {
-    final response = await _apiClient.dio.get('/drivers/$driverId/documents');
-    return (response.data['data'] as List)
-        .map((e) => DriverDocument.fromJson(e))
-        .toList();
+    // Implementación pendiente si el backend tiene un endpoint de docs
+    return [];
   }
 
   @override
   Future<List<Vehicle>> getAssignedVehicles(String driverId) async {
-    // Endpoint sugerido: GET /api/drivers/{id}/vehicles
-    final response = await _apiClient.dio.get('/drivers/$driverId/vehicles');
-    return (response.data['data'] as List)
-        .map((e) => Vehicle.fromJson(e))
-        .toList();
+    try {
+      final response = await _apiClient.dio.get('/me');
+
+      // ESTA LÍNEA ES PARA DEBUG:
+      print("RESPUESTA BACKEND: ${response.data}");
+
+      final userData = response.data['data'];
+      if (userData == null || userData['conductor'] == null) {
+        print("No se encontró objeto conductor en el JSON");
+        return [];
+      }
+
+      final List vehiclesList = userData['conductor']['vehiculos'] ?? [];
+      print("CANTIDAD DE VEHÍCULOS ENCONTRADOS: ${vehiclesList.length}");
+
+      return vehiclesList.map((e) => Vehicle.fromJson(e)).toList();
+    } catch (e) {
+      print("ERROR EN REPOSITORIO: $e");
+      return [];
+    }
   }
 
   @override
@@ -84,44 +78,41 @@ class ApiDriverRepository implements DriverRepository {
     required bool isOnline,
     required String driverId,
     String? vehicleId,
+    double? lat,
+    double? lng,
   }) async {
     try {
-      // Enviamos el vehicle_id al backend para que asocie la sesión
-      await _apiClient.dio.patch(
-        '/drivers/$driverId/status',
+      final response = await _apiClient.dio.post(
+        '/conductor/estado',
         data: {
-          'online': isOnline,
-          'vehicle_id':
-              vehicleId, // Laravel validará si este vehículo tiene tarjeta de operación vigente
+          'esta_online': isOnline,
+          'id_vehiculo': vehicleId,
+          'lat': lat,
+          'lng': lng,
         },
       );
-      return true;
+      // Laravel suele devolver success: true o status: 'success'
+      return response.data['success'] == true ||
+          response.data['status'] == 'success';
     } on DioException catch (e) {
-      if (e.response?.statusCode == 403 || e.response?.statusCode == 422) {
-        final data = e.response?.data;
+      // Capturamos errores 403, 401 o validaciones del Backend
+      String msg =
+          e.response?.data['message'] ?? "Error de conexión con el servidor";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Error inesperado: $e");
+    }
+  }
 
-        // 1. Intentar leer el arreglo de "errors" de Laravel (ej. errors: { soat: })
-        if (data is Map && data.containsKey('errors')) {
-          final Map errors = data;
-          if (errors.isNotEmpty) {
-            final firstError = errors.values.first;
-            final errorMessage = firstError is List
-                ? firstError.first
-                : firstError.toString();
-            throw Exception(errorMessage);
-          }
-        }
-
-        // 2. Si no hay "errors", intentar leer un "message" directo, o poner el texto por defecto
-        final String msg = (data is Map && data.containsKey('message'))
-            ? data
-                  .toString() // <--- AQUÍ ESTÁ LA CORRECCIÓN
-            : "Error de validación legal (FUEC).";
-
-        throw Exception(msg);
-      }
-
-      throw Exception("Error de conexión: ${e.message}");
+  @override
+  Future<void> updatePosition(double lat, double lng) async {
+    try {
+      await _apiClient.dio.post(
+        '/conductor/ubicacion',
+        data: {'lat': lat, 'lng': lng},
+      );
+    } catch (e) {
+      developer.log("Error actualizando ubicación: $e", name: "GPS");
     }
   }
 }
