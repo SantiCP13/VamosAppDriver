@@ -124,37 +124,56 @@ class TripPanelSheet extends StatelessWidget {
 
               const SizedBox(width: 10), // Espacio de seguridad entre elementos
               // Lado Derecho: Botón FUEC
-              ElevatedButton.icon(
-                onPressed: () async {
-                  if (trip.fuecUrl != null) {
-                    await launchUrl(
-                      Uri.parse(trip.fuecUrl!),
-                      mode: LaunchMode.externalApplication,
-                    );
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Generando PDF...")),
-                    );
-                  }
-                },
-                icon: const Icon(
-                  Icons.description,
-                  size: 16,
-                  color: Colors.white,
-                ),
-                label: const Text(
-                  "VER FUEC",
-                  style: TextStyle(color: Colors.white, fontSize: 12),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueGrey,
-                  elevation: 0,
-                  visualDensity: VisualDensity.compact,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
+              if (isStarted && trip.fuecUrl != null)
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    if (trip.fuecUrl != null && trip.fuecUrl!.isNotEmpty) {
+                      // Si el backend envió la URL, la abrimos
+                      final Uri uri = Uri.parse(trip.fuecUrl!);
+                      if (!await launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      )) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('No se pudo abrir el visor de PDF'),
+                            ),
+                          );
+                        }
+                      }
+                    } else {
+                      // Si la URL es null (el backend no la envió todavía)
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            "Generando FUEC legal... Reintenta en 2 segundos",
+                          ),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(
+                    Icons.description,
+                    size: 16,
+                    color: Colors.white,
                   ),
-                ),
-              ),
+                  label: const Text(
+                    "VER FUEC",
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueGrey,
+                    elevation: 0,
+                    visualDensity: VisualDensity.compact,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                )
+              else
+                const SizedBox.shrink(),
             ],
           ),
           const Divider(height: 30),

@@ -3,6 +3,7 @@ import '../../../core/enums/payment_enums.dart'; // Asegúrate de que la ruta se
 import '../../wallet/services/payment_socket_service.dart';
 import '../../../core/di/injection_container.dart';
 import '../repositories/trip_repository.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class PaymentWaitingSheet extends StatefulWidget {
   final String tripId;
@@ -101,9 +102,11 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
 
           // Texto dinámico: Informa al conductor qué está pasando o qué debe cobrar
           Text(
-            isManual ? "Cobro con $methodName" : "Procesando $methodName...",
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
+            "Cobro con ${widget.paymentMethod.displayName}", // <--- CORRECCIÓN: usamos widget.paymentMethod
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 10),
 

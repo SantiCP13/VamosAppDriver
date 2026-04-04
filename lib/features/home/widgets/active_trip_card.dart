@@ -51,7 +51,7 @@ class ActiveTripCard extends StatelessWidget {
                   ),
                   backgroundColor: Colors.green,
                 ),
-                if (trip.fuecUrl != null)
+                if (trip.status == TripStatus.STARTED && trip.fuecUrl != null)
                   TextButton.icon(
                     onPressed: () => _openFuec(context, trip.fuecUrl!),
                     icon: const Icon(Icons.picture_as_pdf, color: Colors.red),
