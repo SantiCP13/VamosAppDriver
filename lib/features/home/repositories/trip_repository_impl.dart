@@ -13,6 +13,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/services/storage_service.dart';
 import '../../auth/providers/auth_provider.dart';
 import 'trip_repository.dart';
+import '../../../core/enums/payment_enums.dart'; // <--- 1. AGREGA ESTA LÍNEA
 
 class ApiTripRepository implements TripRepository {
   final ApiClient _api = ApiClient();
@@ -66,6 +67,10 @@ class ApiTripRepository implements TripRepository {
     if (token == null) return;
 
     try {
+      if (_client != null) {
+        await _client!.disconnect();
+        _eventSubscription?.cancel();
+      }
       _client = PusherChannelsClient.websocket(
         options: PusherChannelsOptions.fromHost(
           scheme: 'ws',
@@ -115,6 +120,27 @@ class ApiTripRepository implements TripRepository {
               }
             }
           });
+          // 🔥 NUEVO: Escuchar si el viaje es cancelado mientras está en oferta o en curso
+          // 🔥 MEJORADO: Ahora sí lee el ID real que manda el servidor
+          myChannel.bind('ViajeCancelado').listen((e) {
+            if (e.data != null) {
+              try {
+                final Map<String, dynamic> data = json.decode(e.data!);
+                debugPrint("🚨 Cancelación para viaje ID: ${data['id']}");
+
+                // Enviamos al controlador el ID real con estado CANCELLED
+                controller.add(
+                  Trip.fromMap({
+                    'id': data['id'].toString(), // ID real del viaje cancelado
+                    'estado': 'CANCELLED',
+                    'mensaje': data['mensaje'] ?? 'El usuario canceló el viaje',
+                  }),
+                );
+              } catch (ex) {
+                debugPrint("❌ Error decodificando cancelación: $ex");
+              }
+            }
+          });
         }
       });
 
@@ -134,36 +160,36 @@ class ApiTripRepository implements TripRepository {
   }) async {
     String? subPath;
 
-    // ✅ Corregido con llaves {} para eliminar el error de compilación
+    // 🔥 NUEVA LÓGICA: Si es cancelar, usamos la ruta dedicada que creamos en Laravel
+    if (status == 'CANCELLED') {
+      final response = await _api.dio.post('/viajes/$tripId/cancelar');
+      if (response.data['status'] == 'success') {
+        return Trip.fromMap({'id': tripId, 'estado': 'CANCELLED'});
+      }
+      throw Exception("No se pudo cancelar en el servidor");
+    }
+
     if (status == 'ARRIVED') {
       subPath = '/llegada';
     } else if (status == 'STARTED') {
       subPath = '/iniciar';
     } else if (status == 'DROPPED_OFF') {
-      // 🔥 CLAVE: Esta ruta traerá el precio real antes de cobrar
       subPath = '/llegada-destino';
-    } else if (status == 'COMPLETED') {
-      subPath = '/finalizar';
     }
 
     if (subPath == null) {
-      return Trip.fromMap({'id': tripId, 'status': status});
+      // ✅ CORRECCIÓN: Eliminamos _activeTrip y devolvemos un objeto básico
+      // Esto solo ocurre si se llama al método con un estado no soportado por esta función.
+      return Trip.fromMap({'id': tripId, 'estado': status});
     }
 
     final response = await _api.dio.post(
       '/viajes/$tripId$subPath',
-      data: {
-        'metodo_pago': 'EFECTIVO',
-        if (lat != null) 'lat': lat,
-        if (lng != null) 'lng': lng,
-      },
+      data: {if (lat != null) 'lat': lat, if (lng != null) 'lng': lng},
     );
 
-    // Verificamos que el servidor devuelva el objeto viaje completo
     if (response.data['viaje'] == null) {
-      throw Exception(
-        "El servidor no devolvió los datos actualizados del viaje.",
-      );
+      throw Exception("El servidor no devolvió los datos del viaje.");
     }
 
     return Trip.fromMap(response.data['viaje']);
@@ -183,7 +209,26 @@ class ApiTripRepository implements TripRepository {
       );
 
   @override
-  Future<void> confirmCashPayment(String tripId) async {}
+  Future<Trip> confirmCashPayment(String tripId, PaymentMethod method) async {
+    // MAPEADOR: Traducimos el Enum de Flutter a lo que Laravel entiende
+    String backendMethod = 'EFECTIVO';
+    if (method == PaymentMethod.WOMPI || method == PaymentMethod.CREDIT_CARD) {
+      backendMethod = 'TARJETA';
+    } else if (method == PaymentMethod.WALLET) {
+      backendMethod = 'CORPORATIVO';
+    }
+    // Nota: CASH, NEQUI y DAVIPLATA se reportan como 'EFECTIVO' porque el conductor recibió el valor físico.
+
+    final response = await _api.dio.post(
+      '/viajes/$tripId/finalizar',
+      data: {'metodo_pago': backendMethod},
+    );
+
+    if (response.data['viaje'] != null) {
+      return Trip.fromMap(response.data['viaje']);
+    }
+    throw Exception("No se pudo confirmar el pago en el servidor");
+  }
 
   void dispose() {
     _eventSubscription?.cancel();
@@ -256,7 +301,10 @@ class MockTripRepository implements TripRepository {
   @override
   Future<void> updateLocation(String tripId, double lat, double lng) async {}
   @override
-  Future<void> confirmCashPayment(String tripId) async {}
+  Future<Trip> confirmCashPayment(String tripId, PaymentMethod method) async {
+    throw UnimplementedError();
+  }
+
   @override
   Stream<void> listenForFleetChanges() => const Stream.empty();
   @override

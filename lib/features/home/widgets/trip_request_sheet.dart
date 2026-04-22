@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/models/trip_model.dart';
-import 'package:google_fonts/google_fonts.dart'; // <--- SOLUCIONA ERROR GoogleFonts
-import '../../../core/theme/app_colors.dart'; // <--- SOLUCIONA ERROR AppColors
+import 'package:google_fonts/google_fonts.dart';
+import '../../../core/theme/app_colors.dart';
 
 class TripRequestSheet extends StatelessWidget {
   final Trip trip;
@@ -15,101 +15,125 @@ class TripRequestSheet extends StatelessWidget {
     required this.onReject,
   });
 
-  // Reemplazar el build de TripRequestSheet
   @override
   Widget build(BuildContext context) {
+    final double totalPeajes = (trip.legalSnapshot?['total_peajes'] ?? 0)
+        .toDouble();
+    final bool tienePeajes = totalPeajes > 0;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(25, 12, 25, 30),
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
-        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 25)],
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        boxShadow: [
+          BoxShadow(color: Colors.black12, blurRadius: 25, spreadRadius: 10),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Handle
           Container(
-            width: 40,
-            height: 4,
+            width: 45,
+            height: 5,
             margin: const EdgeInsets.only(bottom: 20),
             decoration: BoxDecoration(
               color: Colors.grey[200],
               borderRadius: BorderRadius.circular(10),
             ),
           ),
+
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        "OFERTA DISPONIBLE",
+                        style: GoogleFonts.poppins(
+                          color: AppColors.primaryGreen,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 10,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      trip.passengerName,
+                      style: GoogleFonts.poppins(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    "NUEVA SOLICITUD",
+                    "\$${trip.price.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
                     style: GoogleFonts.poppins(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
                       color: AppColors.primaryGreen,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
-                      letterSpacing: 1,
                     ),
                   ),
-                  Text(
-                    trip.passengerName,
-                    style: GoogleFonts.poppins(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
+                  if (tienePeajes)
+                    Text(
+                      "Con peajes",
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.amber[900],
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
                 ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 15,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Text(
-                  "\$${trip.price.toStringAsFixed(0)}",
-                  style: GoogleFonts.poppins(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.primaryGreen,
-                  ),
-                ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          _buildAddressTile(
-            Icons.my_location,
-            "Recoger en:",
-            trip.originAddress,
-            Colors.green,
-          ),
-          const SizedBox(height: 10),
-          _buildAddressTile(
-            Icons.location_on,
-            "Llevar a:",
-            trip.destinationAddress,
-            Colors.red,
-          ),
+
           const SizedBox(height: 25),
+
+          // --- LINEA DE TIEMPO DE DIRECCIONES ---
+          _buildRouteTimeline(),
+
+          const SizedBox(height: 30),
+
           Row(
             children: [
               Expanded(
                 child: TextButton(
                   onPressed: onReject,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                  ),
                   child: Text(
                     "RECHAZAR",
                     style: GoogleFonts.poppins(
-                      color: Colors.red,
+                      color: Colors.red[400],
                       fontWeight: FontWeight.bold,
+                      fontSize: 14,
                     ),
                   ),
                 ),
               ),
+              const SizedBox(width: 15),
               Expanded(
                 flex: 2,
                 child: ElevatedButton(
@@ -117,8 +141,10 @@ class TripRequestSheet extends StatelessWidget {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     padding: const EdgeInsets.symmetric(vertical: 18),
+                    elevation: 5,
+                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(18),
                     ),
                   ),
                   child: Text(
@@ -126,6 +152,7 @@ class TripRequestSheet extends StatelessWidget {
                     style: GoogleFonts.poppins(
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
+                      fontSize: 16,
                     ),
                   ),
                 ),
@@ -137,29 +164,63 @@ class TripRequestSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildAddressTile(
-    IconData icon,
-    String label,
-    String address,
-    Color color,
-  ) {
+  Widget _buildRouteTimeline() {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.grey[100]!),
+      ),
+      child: Column(
+        children: [
+          _addressRow(
+            Icons.radio_button_checked,
+            "Recogida",
+            trip.originAddress,
+            Colors.green,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 9),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(width: 2, height: 20, color: Colors.grey[300]),
+            ),
+          ),
+          _addressRow(
+            Icons.location_on,
+            "Destino",
+            trip.destinationAddress,
+            Colors.redAccent,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _addressRow(IconData icon, String label, String address, Color color) {
     return Row(
       children: [
         Icon(icon, size: 18, color: color),
-        const SizedBox(width: 10),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 label,
-                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  color: Colors.grey[500],
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               Text(
                 address,
                 style: GoogleFonts.poppins(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
+                  color: Colors.black87,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

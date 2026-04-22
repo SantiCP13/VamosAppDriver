@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
-import '../../../core/enums/payment_enums.dart'; // Asegúrate de que la ruta sea correcta
+import '../../../core/enums/payment_enums.dart';
 import '../../wallet/services/payment_socket_service.dart';
 import '../../../core/di/injection_container.dart';
 import '../repositories/trip_repository.dart';
+import '../../../core/models/trip_model.dart'; // <--- 1. IMPORTACIÓN FALTANTE
 import 'package:google_fonts/google_fonts.dart';
 
 class PaymentWaitingSheet extends StatefulWidget {
   final String tripId;
   final double amount;
   final PaymentMethod paymentMethod;
-  final VoidCallback onPaymentConfirmed;
+  final Function(Trip) onPaymentConfirmed; // Callback que ahora exige un Trip
 
   const PaymentWaitingSheet({
     super.key,
@@ -30,20 +31,28 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
   void initState() {
     super.initState();
 
-    // <--- CAMBIO LÓGICO: Usamos el getter 'isManual' de la extensión.
-    // Solo conectamos al socket si el método requiere validación de pasarela o backend (NO es manual)
     if (!widget.paymentMethod.isManual) {
-      // 1. Escuchar la respuesta del Socket
-      _socketService.paymentStream.listen((status) {
+      // 2. CORRECCIÓN POSITIONAL ARGUMENT EN SOCKET
+      _socketService.paymentStream.listen((status) async {
         if (status == PaymentStatus.APPROVED) {
-          if (mounted) {
-            Navigator.pop(context); // Cerrar Sheet
-            widget.onPaymentConfirmed(); // Ejecutar Callback (Finalizar viaje)
+          // Si el pago es por pasarela, pedimos al repo el viaje actualizado
+          // para tener los datos financieros reales (ganancia/comisión).
+          try {
+            final finalTrip = await sl<TripRepository>().updateTripStatus(
+              widget.tripId,
+              "COMPLETED",
+            );
+
+            if (mounted) {
+              Navigator.pop(context);
+              widget.onPaymentConfirmed(finalTrip); // Pasamos el Trip obtenido
+            }
+          } catch (e) {
+            debugPrint("Error obteniendo viaje final tras socket: $e");
           }
         }
       });
 
-      // 2. Conectar al canal
       _socketService.connectToTripPayment(
         widget.tripId,
         methodName: widget.paymentMethod.displayName,
@@ -53,20 +62,17 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
 
   @override
   void dispose() {
-    // Es importante desconectar el socket al cerrar el modal
     _socketService.dispose();
     super.dispose();
   }
 
-  // Helper para asignar un ícono visual según el método de pago
   IconData _getPaymentIcon(PaymentMethod method) {
     switch (method) {
       case PaymentMethod.CASH:
         return Icons.payments_outlined;
       case PaymentMethod.NEQUI:
       case PaymentMethod.DAVIPLATA:
-        return Icons
-            .phone_android_outlined; // Representa transferencia al celular
+        return Icons.phone_android_outlined;
       case PaymentMethod.WALLET:
         return Icons.account_balance_wallet_outlined;
       case PaymentMethod.CREDIT_CARD:
@@ -78,13 +84,11 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
 
   @override
   Widget build(BuildContext context) {
-    // Variables auxiliares usando tu extensión
     final bool isManual = widget.paymentMethod.isManual;
     final String methodName = widget.paymentMethod.displayName;
 
     return Container(
       padding: const EdgeInsets.all(30),
-      height: 400,
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
@@ -92,38 +96,30 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Icono dinámico según el método de pago
           Icon(
             _getPaymentIcon(widget.paymentMethod),
             size: 60,
             color: Colors.green,
           ),
           const SizedBox(height: 20),
-
-          // Texto dinámico: Informa al conductor qué está pasando o qué debe cobrar
           Text(
-            "Cobro con ${widget.paymentMethod.displayName}", // <--- CORRECCIÓN: usamos widget.paymentMethod
+            "Cobro con $methodName",
             style: GoogleFonts.poppins(
               fontSize: 18,
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 10),
-
-          // Monto a cobrar
           Text(
-            "\$${widget.amount.toStringAsFixed(0)}",
-            style: const TextStyle(
-              fontSize: 40,
-              fontWeight: FontWeight.bold,
-              color: Colors.green,
+            "\$${widget.amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
+            style: GoogleFonts.poppins(
+              fontSize: 42,
+              fontWeight: FontWeight.w900,
+              color: Colors.green[700],
             ),
           ),
           const SizedBox(height: 30),
 
-          // Lógica condicional de la UI:
-          // Si es manual (Efectivo, Nequi, Daviplata), el conductor debe confirmar.
-          // Si es automático, mostramos el loader esperando el socket.
           if (isManual)
             SizedBox(
               width: double.infinity,
@@ -136,19 +132,29 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
                   ),
                 ),
                 onPressed: () async {
-                  // 1. Mostrar estado de carga (opcional, pero buena práctica)
-                  // 2. Avisar al backend que recibimos el dinero físico
                   try {
-                    await sl<TripRepository>().confirmCashPayment(
-                      widget.tripId,
-                    );
-                  } catch (e) {
-                    debugPrint("Error reportando pago manual al backend: $e");
-                  }
+                    // 3. CAPTURA DEL TRIP TRAS PAGO MANUAL
+                    final freshTrip = await sl<TripRepository>()
+                        .confirmCashPayment(
+                          widget.tripId,
+                          widget.paymentMethod,
+                        );
 
-                  if (context.mounted) {
+                    if (!mounted) return;
+                    // ignore: use_build_context_synchronously
                     Navigator.pop(context);
-                    widget.onPaymentConfirmed();
+                    widget.onPaymentConfirmed(freshTrip);
+                  } catch (e) {
+                    debugPrint("Error reportando pago manual: $e");
+                    if (!mounted) return;
+                    // ignore: use_build_context_synchronously
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          "Error al confirmar: Verifica tu internet",
+                        ),
+                      ),
+                    );
                   }
                 },
                 child: Text(

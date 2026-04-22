@@ -13,38 +13,20 @@ class TripPanelSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = Provider.of<HomeProvider>(context);
     final trip = provider.activeTrip;
-
     if (trip == null) return const SizedBox.shrink();
 
-    // Colores semánticos
     final bool isStarted = trip.status == TripStatus.STARTED;
     final primaryColor = isStarted
-        ? const Color(0xFFE53935)
-        : AppColors.primaryGreen; // Uso del color unificado
-
-    // -----------------------------------------------------------
-    // LOGICA MOCK HÍBRIDA (PARA VISUALIZAR BENEFICIARIOS)
-    // -----------------------------------------------------------
-    // Aquí simulamos que hay más pasajeros si la lista viene vacía o con 1 solo,
-    // para cumplir con tu requerimiento de "verlo" aunque el backend no esté listo.
-    // Cuando el backend esté listo, borra este bloque 'if'.
-    List<Passenger> displayPassengers = List.from(trip.passengers);
-    if (displayPassengers.length <= 1) {
-      // Usamos el objeto Passenger real
-      displayPassengers.add(Passenger(name: 'Juan Pérez', nationalId: '0000'));
-      displayPassengers.add(
-        Passenger(name: 'Pepito López', nationalId: '1111'),
-      );
-    }
-    // -----------------------------------------------------------
+        ? const Color(0xFF2E7D32)
+        : AppColors.primaryGreen;
 
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black26,
+            color: Colors.black12,
             blurRadius: 20,
             offset: Offset(0, -5),
           ),
@@ -54,7 +36,7 @@ class TripPanelSheet extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 1. Drag Handle
+          // Drag Handle
           Center(
             child: Container(
               width: 40,
@@ -67,373 +49,55 @@ class TripPanelSheet extends StatelessWidget {
           ),
           const SizedBox(height: 15),
 
-          // 2. Cabecera: Estado + FUEC (Protegido contra Overflow)
+          // CABECERA: ESTADO + ETA
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Lado Izquierdo: Etiqueta de Estado + Distancia
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: primaryColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(30),
-                    border: Border.all(
-                      color: primaryColor.withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          _getStatusText(trip.status).toUpperCase(),
-                          style: GoogleFonts.poppins(
-                            color: primaryColor,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 11,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        width: 4,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: primaryColor,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        provider.distanceToTarget,
-                        style: GoogleFonts.poppins(
-                          color: primaryColor,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 10), // Espacio de seguridad entre elementos
-              // Lado Derecho: Botón FUEC
-              if (isStarted && trip.fuecUrl != null)
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    if (trip.fuecUrl != null && trip.fuecUrl!.isNotEmpty) {
-                      // Si el backend envió la URL, la abrimos
-                      final Uri uri = Uri.parse(trip.fuecUrl!);
-                      if (!await launchUrl(
-                        uri,
-                        mode: LaunchMode.externalApplication,
-                      )) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('No se pudo abrir el visor de PDF'),
-                            ),
-                          );
-                        }
-                      }
-                    } else {
-                      // Si la URL es null (el backend no la envió todavía)
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            "Generando FUEC legal... Reintenta en 2 segundos",
-                          ),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                    }
-                  },
-                  icon: const Icon(
-                    Icons.description,
-                    size: 16,
-                    color: Colors.white,
-                  ),
-                  label: const Text(
-                    "VER FUEC",
-                    style: TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey,
-                    elevation: 0,
-                    visualDensity: VisualDensity.compact,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                )
-              else
-                const SizedBox.shrink(),
+              _statusBadge(trip.status, provider.distanceToTarget),
+              if (isStarted) _fuecButton(trip, context),
             ],
           ),
-          const Divider(height: 30),
+          const SizedBox(height: 20),
 
-          // 3. Información del Cliente y Contacto
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.grey,
-                child: Icon(Icons.person, size: 30, color: Colors.white),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      trip.passengerName,
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      "Cliente Principal",
-                      style: GoogleFonts.poppins(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    // BOTONES DE CONTACTO CLICKABLES
-                    Row(
-                      children: [
-                        _ContactButton(
-                          icon: Icons.chat_bubble,
-                          color: const Color(0xFF25D366),
-                          label: "Chat",
-                          onTap: () {
-                            // Si no hay pasajeros cargados, evitamos el crash
-                            if (trip.passengers.isNotEmpty) {
-                              provider.launchWhatsApp(
-                                trip.passengers.first.phone ?? "",
-                              );
-                            }
-                          },
-                        ),
-                        const SizedBox(width: 10),
-                        _ContactButton(
-                          icon: Icons.sos, // SOS
-                          color: Colors.red,
-                          label: "SOS 123",
-                          onTap: () => provider.launchSOS(),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          // CLIENTE + CONTACTO
+          _buildClientSection(trip, provider),
 
-          // 4. LISTA DE BENEFICIARIOS (FUEC REQUIREMENT)
-          // Se muestra si hay más de 1 pasajero (o si usamos el mock)
-          if (displayPassengers.length > 1) ...[
-            const SizedBox(height: 15),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade200),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.people_outline,
-                        size: 16,
-                        color: Colors.grey[600],
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        "Beneficiarios / Acompañantes (FUEC):",
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey[700],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: displayPassengers.skip(1).map((p) {
-                      return Chip(
-                        avatar: const CircleAvatar(
-                          backgroundColor: Colors.white,
-                          child: Icon(
-                            Icons.person_add,
-                            size: 14,
-                            color: Colors.black,
-                          ),
-                        ),
-                        label: Text(
-                          p.name,
-                          style: GoogleFonts.poppins(fontSize: 12),
-                        ),
-                        backgroundColor: Colors.white,
-                        side: BorderSide(color: Colors.grey.shade300),
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          const SizedBox(height: 15),
+
+          // MANIFIESTO DE PASAJEROS (FUEC)
+          _buildPassengerManifest(trip.passengers),
 
           const SizedBox(height: 20),
 
-          // 5. Direcciones con mejor diseño
-          _buildAddressTile(
-            Icons.my_location,
-            trip.status == TripStatus.ACCEPTED ? "Recoger en:" : "Origen:",
-            trip.originAddress,
-            Colors.blue,
-            isFirst: true,
-          ),
-          _buildAddressTile(
-            Icons.location_on,
-            trip.status == TripStatus.ACCEPTED ? "Llevar a:" : "Destino:",
-            trip.destinationAddress,
-            Colors.red,
-            isLast: true,
-          ),
+          // DIRECCIONES (Timeline)
+          _buildTimelineAddresses(trip),
 
           const SizedBox(height: 25),
 
-          // 6. BOTONES DE ACCIÓN (GRANDE Y CLARO)
-          Row(
-            children: [
-              // Botón CANCELAR (Visible y con texto)
-              if (trip.status != TripStatus.STARTED)
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: SizedBox(
-                    height: 54,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _confirmCancel(context, provider),
-                      icon: const Icon(
-                        Icons.cancel_outlined,
-                        color: Colors.red,
-                      ),
-                      label: Text(
-                        "Cancelar\nViaje",
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.red,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.red, width: 1.5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
-                      ),
-                    ),
-                  ),
-                ),
+          // ACCIONES
+          _buildActionButtons(context, provider, trip, primaryColor),
+        ],
+      ),
+    );
+  }
 
-              // Botón PRINCIPAL
-              Expanded(
-                child: SizedBox(
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: provider.isLoading
-                        ? null
-                        : () => provider.handleTripAction(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 4,
-                      shadowColor: primaryColor.withValues(alpha: 0.4),
-                    ),
-                    child: provider.isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
-                        : Text(
-                            _getActionText(trip.status).toUpperCase(),
-                            style: GoogleFonts.poppins(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              letterSpacing: 1,
-                            ),
-                          ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          // 7. Botón Waze/Maps (Estilo "Link")
-          const SizedBox(height: 10),
-          Center(
-            child: InkWell(
-              onTap: () {
-                if (trip.destinationLocation.latitude != 0) {
-                  provider.openExternalNavigation();
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("⚠️ Coordenadas de destino no disponibles"),
-                    ),
-                  );
-                }
-              },
-              borderRadius: BorderRadius.circular(20),
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.network(
-                      'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Waze_logo_2020.svg/1200px-Waze_logo_2020.svg.png',
-                      height: 20,
-                      errorBuilder: (context, error, stackTrace) => const Icon(
-                        Icons.navigation,
-                        size: 20,
-                        color: Colors.blue,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      "Abrir Waze / Google Maps",
-                      style: TextStyle(
-                        color: Colors.blue[800],
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+  Widget _statusBadge(TripStatus status, String distance) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.primaryGreen.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.directions_car, size: 14, color: AppColors.primaryGreen),
+          const SizedBox(width: 6),
+          Text(
+            "${_getStatusText(status)} • $distance",
+            style: GoogleFonts.poppins(
+              color: AppColors.primaryGreen,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
             ),
           ),
         ],
@@ -441,15 +105,300 @@ class TripPanelSheet extends StatelessWidget {
     );
   }
 
-  // Helpers de Texto
+  Widget _fuecButton(Trip trip, BuildContext context) {
+    return InkWell(
+      onTap: () => _openFuec(trip.fuecUrl, context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.blueGrey[800],
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.picture_as_pdf, color: Colors.white, size: 14),
+            const SizedBox(width: 6),
+            Text(
+              "FUEC",
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClientSection(Trip trip, HomeProvider provider) {
+    return Row(
+      children: [
+        const CircleAvatar(
+          radius: 25,
+          backgroundColor: Colors.blueGrey,
+          child: Icon(Icons.person, color: Colors.white),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                trip.passengerName,
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                "Cliente Principal",
+                style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+        _roundIconButton(
+          Icons.chat_bubble,
+          Colors.green,
+          () => provider.launchWhatsApp(trip.passengers.first.phone ?? ""),
+        ),
+        const SizedBox(width: 10),
+        _roundIconButton(Icons.sos, Colors.red, () => provider.launchSOS()),
+      ],
+    );
+  }
+
+  Widget _buildPassengerManifest(List<Passenger> passengers) {
+    if (passengers.length <= 1) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "MANIFIESTO LEGAL (ACOMPAÑANTES)",
+            style: GoogleFonts.poppins(
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[600],
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: passengers
+                  .skip(1)
+                  .map(
+                    (p) => Container(
+                      margin: const EdgeInsets.only(right: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey[300]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p.name,
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            "${p.documentType}: ${p.nationalId}",
+                            style: GoogleFonts.poppins(
+                              fontSize: 9,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineAddresses(Trip trip) {
+    return Column(
+      children: [
+        _timelineRow(
+          Icons.radio_button_checked,
+          trip.originAddress,
+          Colors.green,
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Container(width: 1, height: 15, color: Colors.grey[300]),
+          ),
+        ),
+        _timelineRow(
+          Icons.location_on,
+          trip.destinationAddress,
+          Colors.redAccent,
+        ),
+      ],
+    );
+  }
+
+  Widget _timelineRow(IconData icon, String address, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            address,
+            style: GoogleFonts.poppins(fontSize: 13, color: Colors.black87),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButtons(
+    BuildContext context,
+    HomeProvider provider,
+    Trip trip,
+    Color primaryColor,
+  ) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            if (trip.status != TripStatus.STARTED)
+              _actionBtn(
+                Icons.close,
+                "CANCELAR",
+                Colors.red[50]!,
+                Colors.red,
+                () => _confirmCancel(context, provider),
+              ),
+            if (trip.status != TripStatus.STARTED) const SizedBox(width: 12),
+            Expanded(
+              child: _actionBtn(
+                null,
+                _getActionText(trip.status).toUpperCase(),
+                primaryColor,
+                Colors.white,
+                () => provider.handleTripAction(context),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 15),
+        InkWell(
+          onTap: provider.openExternalNavigation,
+          child: Text(
+            "Abrir Waze o Google Maps",
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              color: Colors.blue[800],
+              fontWeight: FontWeight.w600,
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- HELPERS DE DISEÑO ---
+  Widget _roundIconButton(IconData icon, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(15),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: Icon(icon, color: color, size: 20),
+      ),
+    );
+  }
+
+  Widget _actionBtn(
+    IconData? icon,
+    String text,
+    Color bg,
+    Color txt,
+    VoidCallback onTap,
+  ) {
+    return SizedBox(
+      height: 56,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: bg,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) Icon(icon, color: txt, size: 18),
+            if (icon != null) const SizedBox(width: 8),
+            Text(
+              text,
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.bold,
+                color: txt,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openFuec(String? url, BuildContext context) async {
+    if (url == null || url.isEmpty) return;
+    final Uri uri = Uri.parse(url);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      ScaffoldMessenger.of(
+        // ignore: use_build_context_synchronously
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No se pudo abrir el PDF')));
+    }
+  }
+
   String _getStatusText(TripStatus status) {
     switch (status) {
       case TripStatus.ACCEPTED:
-        return "En Camino";
+        return "En camino";
       case TripStatus.ARRIVED:
-        return "Esperando Pasajero";
+        return "En el sitio";
       case TripStatus.STARTED:
-        return "Viaje en Curso";
+        return "En viaje";
       default:
         return "";
     }
@@ -458,69 +407,14 @@ class TripPanelSheet extends StatelessWidget {
   String _getActionText(TripStatus status) {
     switch (status) {
       case TripStatus.ACCEPTED:
-        return "Llegué al Sitio";
+        return "Llegué al sitio";
       case TripStatus.ARRIVED:
-        return "Iniciar Carrera";
+        return "Iniciar carrera";
       case TripStatus.STARTED:
-        return "Finalizar Viaje";
+        return "Finalizar viaje";
       default:
-        return "Cargando";
+        return "Continuar";
     }
-  }
-
-  // Widget auxiliar para direcciones con línea conectora visual
-  Widget _buildAddressTile(
-    IconData icon,
-    String label,
-    String address,
-    Color dotColor, {
-    bool isFirst = false,
-    bool isLast = false,
-  }) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Column(
-            children: [
-              Icon(icon, size: 20, color: dotColor),
-              if (!isLast)
-                Expanded(
-                  child: Container(
-                    width: 2,
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    color: Colors.grey[300],
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(width: 15),
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(bottom: isLast ? 0 : 15),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                  Text(
-                    address,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _confirmCancel(BuildContext context, HomeProvider provider) {
@@ -528,18 +422,11 @@ class TripPanelSheet extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        title: Text(
-          "¿Cancelar viaje?",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Text(
-          "Esta acción afectará tu tasa de aceptación y podría generar cargos.",
-          style: GoogleFonts.poppins(),
-        ),
+        title: const Text("¿Cancelar viaje?"),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("Volver"),
+            child: const Text("VOLVER"),
           ),
           TextButton(
             onPressed: () {
@@ -547,56 +434,11 @@ class TripPanelSheet extends StatelessWidget {
               provider.cancelCurrentTrip(context);
             },
             child: const Text(
-              "Sí, Cancelar",
+              "SÍ, CANCELAR",
               style: TextStyle(color: Colors.red),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// Widget privado para botón de contacto estilizado
-class _ContactButton extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String label;
-  final VoidCallback onTap;
-
-  const _ContactButton({
-    required this.icon,
-    required this.color,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

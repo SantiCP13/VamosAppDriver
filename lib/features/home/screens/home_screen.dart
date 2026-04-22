@@ -19,6 +19,7 @@ import '../widgets/trip_panel_sheet.dart'; // <--- NUEVO IMPORT
 import '../widgets/side_menu.dart';
 import 'dart:math' as math; // Para la rotación
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../../../core/utils/cached_tile_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -43,11 +44,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // 🔥 FORZAMOS CARGA DE BILLETERA
       debugPrint("🚩 Llamando a loadWalletData...");
       context.read<WalletProvider>().loadWalletData();
+      context.read<HomeProvider>().addListener(_onTripStateChanged);
     });
   }
 
   @override
   void dispose() {
+    context.read<HomeProvider>().removeListener(_onTripStateChanged);
+
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -82,7 +86,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       barrierDismissible: false,
       builder: (_) => PopScope(
-        canPop: false,
+        canPop: false, // No permite salir con el botón "atrás"
+        // Cambiamos onPopInvoked por la versión más moderna para evitar el aviso amarillo:
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) return;
+        },
         child: AlertDialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(15),
@@ -124,11 +132,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // Nueva función para mover la cámara cuando el viaje cambia
+  void _onTripStateChanged() {
+    final provider = context.read<HomeProvider>();
+    final trip = provider.activeTrip;
+
+    if (trip != null) {
+      // Si el viaje acaba de ser aceptado o el conductor llegó
+      if (trip.status == TripStatus.ACCEPTED ||
+          trip.status == TripStatus.ARRIVED) {
+        _mapController.move(trip.originLocation, 15.0);
+      }
+      // Si el viaje ya inició (va hacia el destino)
+      else if (trip.status == TripStatus.STARTED) {
+        _mapController.move(trip.destinationLocation, 15.0);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Escuchamos los cambios del Provider Global
-    final provider = context.watch<HomeProvider>();
-    final trip = provider.activeTrip;
+    // 1. QUITAMOS el context.watch() de aquí para evitar redibujos masivos.
+    // Solo usamos context.read() para valores que no cambian constantemente.
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -136,238 +162,154 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: Stack(
         children: [
           // --------------------------
-          // 1. EL MAPA
+          // 1. EL MAPA (Optimizado)
           // --------------------------
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter:
-                  provider.currentPosition ?? const LatLng(4.6097, -74.0817),
-              initialZoom: 15.0,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate:
-                    'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=$myMapboxToken',
-                additionalOptions: {'accessToken': myMapboxToken},
-                tileProvider: NetworkTileProvider(),
-              ),
-              // Ruta Azul
-              if (provider.routePoints.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: provider.routePoints,
-                      color: Colors.blueAccent,
-                      strokeWidth: 5.0,
-                    ),
-                  ],
+          // Usamos un Selector para que el mapa SOLO se entere si la RUTA cambia,
+          // ignorando los movimientos pequeños del carro para el renderizado del mapa base.
+          Selector<HomeProvider, List<LatLng>>(
+            selector: (_, provider) => provider.routePoints,
+            builder: (context, routePoints, child) {
+              return FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  // initialCenter solo se usa la primera vez, lo cual es excelente para el rendimiento
+                  initialCenter:
+                      context.read<HomeProvider>().currentPosition ??
+                      const LatLng(4.6097, -74.0817),
+                  initialZoom: 15.0,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                  ),
                 ),
-              // Marcadores
-              MarkerLayer(
-                markers: [
-                  // Auto del Conductor
-                  if (provider.currentPosition != null)
-                    Marker(
-                      point: provider.currentPosition!,
-                      width: 80,
-                      height: 80,
-                      child: Transform.rotate(
-                        angle:
-                            (provider.currentHeading *
-                            math.pi /
-                            180), // Rotación real
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            // Efecto Glow (Sombra verde suave)
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: AppColors.primaryGreen.withValues(
-                                  alpha: 0.15,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color.fromARGB(
-                                      255,
-                                      9,
-                                      192,
-                                      3,
-                                    ).withValues(alpha: 0.2),
-                                    blurRadius: 15,
-                                    spreadRadius: 5,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            // El Vehículo (Puedes usar un Icono o una imagen local)
-                            const Icon(
-                              Icons
-                                  .navigation_rounded, // Icono estilo "flecha pro" o directions_car
-                              color: Color.fromARGB(255, 1, 17, 71),
-                              size: 35,
-                            ),
-                          ],
+                children: [
+                  // Este es el mapa base. Al estar dentro de un Selector que solo mira la ruta,
+                  // Mapbox no recibirá peticiones nuevas si solo te estás moviendo.
+                  TileLayer(
+                    urlTemplate:
+                        'https://api.mapbox.com/styles/v1/${isDark ? "mapbox/dark-v11" : "mapbox/streets-v12"}/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
+                    userAgentPackageName: 'com.vamosapp.vamosdriver',
+                    retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
+                    tileProvider: CachedTileProvider(),
+                    keepBuffer: 5,
+                    panBuffer: 2,
+                    tileDisplay: const TileDisplay.fadeIn(
+                      duration: Duration(milliseconds: 200),
+                    ),
+                  ),
+
+                  // Capa de Ruta
+                  if (routePoints.isNotEmpty)
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: routePoints,
+                          color: Colors.blueAccent,
+                          strokeWidth: 5.0,
                         ),
-                      ),
+                      ],
                     ),
-                  // Origen (Verde)
-                  if (trip != null &&
-                      (trip.status == TripStatus.ACCEPTED ||
-                          trip.status == TripStatus.ARRIVED))
-                    Marker(
-                      point: trip.originLocation,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.location_on,
-                        color: Colors.green,
-                        size: 40,
-                      ),
-                    ),
-                  // Destino (Rojo)
-                  if (trip != null && trip.status == TripStatus.STARTED)
-                    Marker(
-                      point: trip.destinationLocation,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.flag,
-                        color: Colors.red,
-                        size: 40,
-                      ),
-                    ),
+
+                  // CAPA DE MARCADORES (Se actualiza con otro Consumer interno)
+                  const _MarkersLayer(),
                 ],
+              );
+            },
+          ),
+
+          // --------------------------
+          // 2. BOTONES Y PANELES (Consumer)
+          // --------------------------
+          // Los botones y paneles sí deben refrescarse, pero no afectan al mapa base.
+          Consumer<HomeProvider>(
+            builder: (context, provider, _) {
+              final trip = provider.activeTrip;
+              return Stack(
+                children: [
+                  if (trip == null) _buildMenuButton(),
+                  if (trip == null) _buildOnlineStatusIndicator(provider),
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: _buildPanelContent(context, provider),
+                  ),
+                  _buildReCenterButton(provider, trip),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMenuButton() {
+    return Positioned(
+      top: 50,
+      left: 20,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 15)],
+        ),
+        child: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReCenterButton(HomeProvider provider, dynamic trip) {
+    return Positioned(
+      right: 20,
+      bottom: trip != null ? 380 : 300,
+      child: FloatingActionButton(
+        mini: true,
+        backgroundColor: Colors.white,
+        onPressed: () => _mapController.move(provider.currentPosition!, 15),
+        child: const Icon(Icons.my_location, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _buildOnlineStatusIndicator(HomeProvider provider) {
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Container(
+          margin: const EdgeInsets.only(top: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(35),
+            boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10)],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: provider.isOnline
+                      ? AppColors.primaryGreen
+                      : Colors.redAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                provider.isOnline ? "EN LÍNEA" : "DESCONECTADO",
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
-
-          // --------------------------
-          // 2. BOTÓN MENÚ (Hamburguesa)
-          // --------------------------
-          // Solo visible si no hay viaje activo para no saturar la pantalla
-          // --- REEMPLAZAR EL BOTÓN DE MENÚ ---
-          if (trip == null)
-            Positioned(
-              top: 50,
-              left: 20,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 15,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.menu, color: Colors.black87),
-                  onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                ),
-              ),
-            ),
-
-          // --- REEMPLAZAR EL INDICADOR DE ESTADO (ONLINE/OFFLINE) ---
-          if (trip == null)
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Container(
-                  margin: const EdgeInsets.only(top: 10),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 25,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(35), // Ultra redondeado
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: provider.isOnline
-                              ? AppColors.primaryGreen
-                              : Colors.redAccent,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color:
-                                  (provider.isOnline
-                                          ? AppColors.primaryGreen
-                                          : Colors.redAccent)
-                                      .withValues(alpha: 0.4),
-                              blurRadius: 4,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        provider.isOnline ? "EN LÍNEA" : "DESCONECTADO",
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          letterSpacing: 0.5,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: _buildPanelContent(context, provider),
-          ),
-          // --- REEMPLAZAR EL BOTÓN RE-CENTRAR ---
-          Positioned(
-            right: 20,
-            bottom: trip != null ? 380 : 300,
-            child: GestureDetector(
-              onTap: () {
-                if (provider.currentPosition != null) {
-                  _mapController.move(provider.currentPosition!, 15);
-                }
-              },
-              child: Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(15),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: const Icon(Icons.my_location, color: Colors.black87),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -705,6 +647,60 @@ class _VehicleSelector extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _MarkersLayer extends StatelessWidget {
+  const _MarkersLayer();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<HomeProvider>(
+      builder: (context, provider, _) {
+        final trip = provider.activeTrip;
+        return MarkerLayer(
+          markers: [
+            // Carrito del conductor
+            if (provider.currentPosition != null)
+              Marker(
+                point: provider.currentPosition!,
+                width: 80,
+                height: 80,
+                child: Transform.rotate(
+                  angle: (provider.currentHeading * math.pi / 180),
+                  child: const Icon(
+                    Icons.navigation_rounded,
+                    color: Color(0xFF011147),
+                    size: 35,
+                  ),
+                ),
+              ),
+            // Marcador de Origen
+            if (trip != null &&
+                (trip.status == TripStatus.ACCEPTED ||
+                    trip.status == TripStatus.ARRIVED))
+              Marker(
+                point: trip.originLocation,
+                width: 40,
+                height: 40,
+                child: const Icon(
+                  Icons.location_on,
+                  color: Colors.green,
+                  size: 40,
+                ),
+              ),
+            // Marcador de Destino
+            if (trip != null && trip.status == TripStatus.STARTED)
+              Marker(
+                point: trip.destinationLocation,
+                width: 40,
+                height: 40,
+                child: const Icon(Icons.flag, color: Colors.red, size: 40),
+              ),
+          ],
+        );
+      },
     );
   }
 }

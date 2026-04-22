@@ -71,6 +71,7 @@ class HomeProvider extends ChangeNotifier {
   List<LatLng> get routePoints => _routePoints;
   List<Vehicle> get myVehicles => _myVehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
+  Timer? _heartbeatTimer;
 
   // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
   String get distanceToTarget {
@@ -109,13 +110,18 @@ class HomeProvider extends ChangeNotifier {
       // Encendemos el monitor de la billetera (independiente de si está Online)
       _startListeningWalletUpdates(user.id);
     }
-    // 1. Recuperar viaje persistido (si la app se cerró)
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
-      _activeTrip = savedTrip;
-      _isOnline = true; // Forzamos online si hay un viaje activo
-      _startListeningTrips();
-      await _calculateRouteForCurrentStatus();
+      // 🔥 VALIDACIÓN EXTRA: Si el viaje guardado no tiene dirección o ID real, bórralo.
+      if (savedTrip.id == "0" ||
+          savedTrip.originAddress.contains("Origen...")) {
+        await _storageService.clearCurrentTrip();
+      } else {
+        _activeTrip = savedTrip;
+        _isOnline = true;
+        _startListeningTrips();
+        await _calculateRouteForCurrentStatus();
+      }
     }
 
     // 2. Permisos y GPS
@@ -134,6 +140,18 @@ class HomeProvider extends ChangeNotifier {
 
   void _startTracking() {
     _positionSubscription?.cancel();
+    _heartbeatTimer?.cancel(); // Limpiar anterior
+
+    // Timer que avisa al server cada 30 seg aunque estés quieto
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (_isOnline && _activeTrip == null && _currentPosition != null) {
+        _driverRepository.updatePosition(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+        );
+      }
+    });
+
     _positionSubscription = _locationService.getPositionStream().listen((pos) {
       _updatePosition(pos);
     });
@@ -233,41 +251,63 @@ class HomeProvider extends ChangeNotifier {
   Future<String?> toggleOnlineStatus() async {
     if (_isLoading) return null;
 
+    // 1. VALIDACIÓN PREVIA DE VEHÍCULO
     if (!_isOnline && _selectedVehicle == null) {
-      return "⚠️ Debes seleccionar un vehículo para generar el FUEC.";
+      return "⚠️ Debes seleccionar un vehículo para conectarte.";
+    }
+
+    // 2. VALIDACIÓN CRÍTICA DE GPS (Evita ser invisible en Redis)
+    if (!_isOnline && _currentPosition == null) {
+      _isLoading = true;
+      notifyListeners();
+
+      // Intentamos obtener la ubicación una última vez antes de fallar
+      final position = await _locationService.getCurrentLocation();
+      if (position != null) {
+        _currentPosition = LatLng(position.latitude, position.longitude);
+      } else {
+        _isLoading = false;
+        notifyListeners();
+        return "⚠️ No se pudo obtener tu ubicación GPS. Verifica los permisos.";
+      }
     }
 
     _isLoading = true;
     notifyListeners();
 
     try {
-      // 1. Validar documentos antes de intentar conectar (Usamos la función huérfana)
+      // 3. Validar documentos (SOAT/Tecno) antes de conectar
       if (!_isOnline) {
         await _checkDocumentsValidity();
       }
 
       final String userId = sl<AuthProvider>().user?.id ?? "0";
 
-      // 2. Llamada al repo con todos los parámetros corregidos
-      await _driverRepository.toggleStatus(
+      // 4. Llamada al servidor enviando OBLIGATORIAMENTE las coordenadas
+      final bool success = await _driverRepository.toggleStatus(
         isOnline: !_isOnline,
         driverId: userId,
-        vehicleId: _selectedVehicle?.id, // Aquí ya no habrá error de String/int
-        lat: _currentPosition?.latitude,
+        vehicleId: _selectedVehicle?.id,
+        lat:
+            _currentPosition?.latitude, // Ya garantizamos que no es null arriba
         lng: _currentPosition?.longitude,
       );
 
-      _isOnline = !_isOnline;
+      if (success) {
+        _isOnline = !_isOnline;
 
-      if (_isOnline) {
-        _startListeningTrips();
+        if (_isOnline) {
+          _startListeningTrips();
+        } else {
+          _stopListeningTrips();
+          _activeTrip = null;
+          _routePoints = [];
+          await _storageService.clearCurrentTrip();
+        }
+        return null;
       } else {
-        _stopListeningTrips();
-        _activeTrip = null;
-        _routePoints = [];
-        await _storageService.clearCurrentTrip();
+        return "No se pudo actualizar el estado en el servidor.";
       }
-      return null;
     } catch (e) {
       return e.toString().replaceAll("Exception: ", "");
     } finally {
@@ -293,10 +333,31 @@ class HomeProvider extends ChangeNotifier {
   void _startListeningTrips() {
     _tripSubscription?.cancel();
 
-    // Aquí solo dejamos la escucha de viajes (Ofertas),
-    // porque esto sí solo debe ocurrir cuando el conductor está Online.
+    // Escuchamos el stream que viene del repositorio de sockets
     _tripSubscription = _tripRepository.listenForTrips().listen((trip) {
-      if (_activeTrip != null) return;
+      // 1. 🔥 LÓGICA DE CANCELACIÓN EN TIEMPO REAL
+      // Si el ID del viaje cancelado coincide con el que el conductor tiene en pantalla
+      if (trip.status == TripStatus.CANCELLED) {
+        bool esMiOferta = _incomingTrip?.id == trip.id;
+        bool esMiViajeActivo = _activeTrip?.id == trip.id;
+
+        if (esMiOferta || esMiViajeActivo) {
+          debugPrint(
+            "🛑 El viaje ${trip.id} ha sido cancelado. Limpiando UI...",
+          );
+
+          _incomingTrip = null;
+          _activeTrip = null;
+          _routePoints = [];
+          _storageService.clearCurrentTrip();
+
+          notifyListeners(); // Esto hace que el aviso desaparezca de la pantalla
+        }
+        return;
+      }
+
+      // 2. Lógica normal para mostrar ofertas nuevas
+      if (_activeTrip != null || _incomingTrip != null) return;
       _incomingTrip = trip;
       notifyListeners();
     });
@@ -315,22 +376,29 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // 🔥 CAMBIO CLAVE: Usamos assignmentId si existe, sino usamos el id
       final idParaResponder = _incomingTrip!.assignmentId ?? _incomingTrip!.id;
 
       final acceptedTrip = await _tripRepository.acceptTrip(
-        idParaResponder, // <--- Ahora enviará "8" y no "34"
+        idParaResponder,
         _currentPosition!.latitude,
         _currentPosition!.longitude,
       );
 
+      // --- CAMBIO AQUÍ: Actualizamos estados PRIMERO ---
       _activeTrip = acceptedTrip;
-      _incomingTrip = null;
+      _incomingTrip = null; // Esto quita el panel de "Oferta" inmediatamente
+      _isLoading =
+          false; // Quitamos el loading para que el botón no se quede gris
+
+      // Notificamos para que la UI cambie a TripPanelSheet de inmediato
+      notifyListeners();
+
+      // --- LUEGO: Guardamos y calculamos la ruta en segundo plano ---
       await _storageService.saveCurrentTrip(_activeTrip!);
       await _calculateRouteForCurrentStatus();
+      // (Nota: _calculateRouteForCurrentStatus ya llama a notifyListeners al final)
     } catch (e) {
-      debugPrint("Error: $e");
-    } finally {
+      debugPrint("Error al aceptar viaje: $e");
       _isLoading = false;
       notifyListeners();
     }
@@ -338,7 +406,12 @@ class HomeProvider extends ChangeNotifier {
 
   void rejectIncomingTrip() {
     if (_incomingTrip != null) {
-      _tripRepository.rejectTrip(_incomingTrip!.id);
+      // 🔥 CAMBIO CLAVE: Usamos assignmentId igual que en aceptar,
+      // para que Laravel busque la asignación correcta y no dé 404.
+      final idParaResponder = _incomingTrip!.assignmentId ?? _incomingTrip!.id;
+
+      _tripRepository.rejectTrip(idParaResponder);
+
       _incomingTrip = null;
       notifyListeners();
     }
@@ -396,9 +469,9 @@ class HomeProvider extends ChangeNotifier {
             amount: _activeTrip!.price,
             paymentMethod: _activeTrip!
                 .paymentMethod, // <--- CAMBIO: Pasamos el método de pago
-            onPaymentConfirmed: () {
+            onPaymentConfirmed: (Trip freshTrip) {
               // C. Callback: El pago fue confirmado (Vía Socket o Vía Efectivo)
-              _finalizeTripWithWallet(context);
+              _finalizeTripWithWallet(context, freshTrip);
             },
           ),
         );
@@ -419,21 +492,21 @@ class HomeProvider extends ChangeNotifier {
   }
 
   /// Cierre definitivo tras confirmación de pago
-  Future<void> _finalizeTripWithWallet(BuildContext context) async {
-    if (_activeTrip == null) return;
+  // Añadimos el parámetro Trip? updatedTrip
+  Future<void> _finalizeTripWithWallet(
+    BuildContext context,
+    Trip? updatedTrip,
+  ) async {
+    if (_activeTrip == null && updatedTrip == null) return;
+
+    // Si recibimos el viaje actualizado del modal, lo usamos
+    if (updatedTrip != null) {
+      _activeTrip = updatedTrip;
+    }
 
     try {
-      // 1. Enviar estado COMPLETED al Backend Y GUARDAR EL RESULTADO
-      final completedTrip = await _tripRepository.updateTripStatus(
-        _activeTrip!.id,
-        TripStatus.COMPLETED.name,
-      );
-
-      // <--- SOLUCIÓN: Actualizamos el viaje activo con los datos financieros reales
-      _activeTrip = completedTrip;
-
-      // 2. Actualizar módulos locales (Wallet / History)
       if (context.mounted) {
+        // 1. Mantenemos tus llamadas a los otros Providers (Esto quita las advertencias)
         Provider.of<WalletProvider>(
           context,
           listen: false,
@@ -443,21 +516,32 @@ class HomeProvider extends ChangeNotifier {
           listen: false,
         ).addFinishedTrip(_activeTrip!);
 
+        // 2. Mi mejora: Formateamos la ganancia dinámica que viene del Backend
+        final String gananciaFormateada = _activeTrip!.driverRevenue
+            .toStringAsFixed(0)
+            .replaceAllMapped(
+              RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+              (Match m) => '${m[1]}.',
+            );
+
+        // 3. Mostramos el SnackBar corregido
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "✅ Viaje finalizado. Ganancia: \$${_activeTrip!.driverRevenue.toStringAsFixed(0)}",
+              "✅ Viaje finalizado. Tu ganancia neta: \$$gananciaFormateada",
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: Colors.green[800],
             behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
           ),
         );
       }
-
-      // 3. Limpiar mapa y buscar nuevos viajes
       _finishTrip();
     } catch (e) {
-      debugPrint("Error cerrando viaje: $e");
+      debugPrint("Error local al cerrar viaje: $e");
     }
   }
 
@@ -517,21 +601,25 @@ class HomeProvider extends ChangeNotifier {
     try {
       await _tripRepository.updateTripStatus(_activeTrip!.id, "CANCELLED");
 
-      _activeTrip = null;
-      _routePoints = [];
-      await _storageService.clearCurrentTrip();
-      _startListeningTrips();
+      // Si tiene éxito, limpiamos normal
+      _finishTrip();
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Viaje cancelado"),
-            backgroundColor: Colors.orange,
-          ),
+          const SnackBar(content: Text("Viaje cancelado con éxito")),
         );
       }
     } catch (e) {
       debugPrint("Error cancelando: $e");
+
+      // 🔥 FORZAR LIMPIEZA: Aunque el servidor falle, liberamos al conductor
+      _finishTrip();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Estado sincronizado localmente.")),
+        );
+      }
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -593,6 +681,8 @@ class HomeProvider extends ChangeNotifier {
   void dispose() {
     _positionSubscription?.cancel();
     _tripSubscription?.cancel();
+    _heartbeatTimer?.cancel();
+
     super.dispose();
   }
 }

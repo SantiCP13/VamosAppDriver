@@ -17,20 +17,33 @@ enum TripStatus {
 class Passenger {
   final String name;
   final String nationalId;
+  final String documentType; // <--- NUEVO: CC, CE, TI, etc.
   final String? phone;
 
-  Passenger({required this.name, required this.nationalId, this.phone});
+  Passenger({
+    required this.name,
+    required this.nationalId,
+    this.documentType = 'CC', // Por defecto CC
+    this.phone,
+  });
 
   Map<String, dynamic> toJson() => {
-    'name': name,
-    'national_id': nationalId,
+    'nombre_completo': name,
+    'numero_documento': nationalId,
+    'tipo_documento': documentType,
     'phone': phone,
   };
 
   factory Passenger.fromJson(Map<String, dynamic> json) {
     return Passenger(
-      name: json['name'] ?? '',
-      nationalId: json['national_id'] ?? json['cedula'] ?? '',
+      // Sincronizamos llaves con el Backend de Laravel
+      name: json['nombre_completo'] ?? json['name'] ?? 'Pasajero',
+      nationalId:
+          json['numero_documento'] ??
+          json['national_id'] ??
+          json['cedula'] ??
+          '',
+      documentType: json['tipo_documento'] ?? json['document_type'] ?? 'CC',
       phone: json['phone'] ?? json['telefono'] ?? json['celular'],
     );
   }
@@ -152,51 +165,47 @@ class Trip {
       return 0.0;
     }
 
-    // 1. Intentar parsear el estado que viene del string 'estado'
     TripStatus calculatedStatus = _parseStatus(map['estado'] ?? map['status']);
 
-    // 2. MAGIA: Inferencia de estado por fechas (Si el string falla, las fechas mandan)
-    // Esto asegura que si en Tinker actualizas 'llegado_en', la App responda aunque no mandes 'estado'
-    if (map['id_conductor'] != null &&
-        calculatedStatus == TripStatus.REQUESTED) {
-      calculatedStatus = TripStatus.ACCEPTED;
-    }
-    if (map['llegado_en'] != null) {
-      calculatedStatus = TripStatus.ARRIVED;
-    }
-    if (map['iniciado_en'] != null) {
-      calculatedStatus = TripStatus.STARTED;
-    }
-    if (map['cancelado_en'] != null) {
-      calculatedStatus = TripStatus.CANCELLED;
-    }
-    if (map['finalizado_en'] != null) {
-      calculatedStatus = TripStatus.COMPLETED;
-    }
+    // --- NUEVA LÓGICA FINANCIERA DINÁMICA ---
+    final desglose = map['desglose_precio'] ?? {};
+    final double totalPeajes = checkDouble(desglose['total_peajes']);
+    final latOri = checkDouble(map['lat_origen']);
 
     return Trip(
-      id: (map['id'] ?? map['viaje_id'] ?? map['uuid'] ?? '').toString(),
+      id: (latOri == 0.0)
+          ? "0"
+          : (map['id'] ?? map['viaje_id'] ?? '').toString(),
       assignmentId: map['assignment_id']?.toString(),
-      fuecUrl:
-          map['fuec_url']?.toString() ?? map['fuec_url_descarga']?.toString(),
+      fuecUrl: map['fuec_url']?.toString(),
       contractId: map['id_contrato']?.toString(),
       passengers: map['pasajeros'] != null
           ? List<Passenger>.from(
               map['pasajeros'].map((x) => Passenger.fromJson(x)),
             )
           : [],
-      price: checkDouble(map['precio_estimado']),
-      driverRevenue: checkDouble(map['ganancia_conductor']),
-      platformFee: checkDouble(map['comision_app']),
-      distanceKm: checkDouble(map['distancia_km']),
-      originAddress: map['origen'] ?? 'Origen desconocido',
-      destinationAddress: map['destino'] ?? 'Destino desconocido',
-      date: DateTime.parse(
-        map['solicitado_en'] ??
-            map['created_at'] ??
-            DateTime.now().toIso8601String(),
+
+      // 1. PRECIO TOTAL (Lo que paga el usuario)
+      price: checkDouble(
+        map['precio_estimado'] ??
+            map['total_a_cobrar_al_pasajero'] ??
+            map['monto_final'],
       ),
-      status: calculatedStatus, // <--- Estado ultra verificado
+
+      // 2. GANANCIA NETA (Lo que le queda al conductor después de comisión)
+      driverRevenue: checkDouble(
+        map['ganancia_conductor'] ?? map['tu_ganancia_neta'],
+      ),
+
+      // 3. COMISIÓN (Lo que se queda la App)
+      platformFee: checkDouble(
+        map['comision_app'] ?? map['comision_app_descontada'],
+      ),
+
+      originAddress: map['origen'] ?? 'Origen...',
+      destinationAddress: map['destino'] ?? 'Destino...',
+      distanceKm: checkDouble(map['distancia_km']),
+      status: calculatedStatus,
       paymentMethod: _parsePaymentMethod(map['metodo_pago']),
       originLocation: LatLng(
         checkDouble(map['lat_origen']),
@@ -206,12 +215,18 @@ class Trip {
         checkDouble(map['lat_destino']),
         checkDouble(map['lng_destino']),
       ),
-      legalSnapshot: map['snapshot_legal'] is String
-          ? json.decode(map['snapshot_legal'])
-          : map['snapshot_legal'],
+      date: DateTime.parse(
+        map['solicitado_en'] ?? DateTime.now().toIso8601String(),
+      ),
+
+      // Guardamos info extra para mostrarla en el historial
+      legalSnapshot: {
+        'total_peajes': totalPeajes,
+        'porcentaje_comision': checkDouble(desglose['porcentaje_aplicado']),
+        ...(map['snapshot_legal'] is Map ? map['snapshot_legal'] : {}),
+      },
     );
   }
-
   static TripStatus _parseStatus(dynamic status) {
     if (status == null) {
       return TripStatus.REQUESTED;
