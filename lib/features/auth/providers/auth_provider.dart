@@ -6,7 +6,23 @@ import '../services/driver_auth_service.dart';
 class AuthProvider extends ChangeNotifier {
   final DriverAuthService _authService = DriverAuthService();
 
+  // Getter para obtener el usuario actual desde el servicio
   User? get user => _authService.currentUser;
+
+  /// NUEVO MÉTODO: Verifica si el token es válido al arrancar la app
+  /// Esto es lo que el main.dart necesita para no dar error.
+  Future<bool> checkAuthStatus() async {
+    // Llamamos al método que ya creaste en el servicio
+    final status = await _authService.verifySessionAndGetStatus();
+
+    // Si el status no es nulo, significa que el token es válido y el usuario existe
+    if (status != null) {
+      notifyListeners();
+      return true;
+    }
+
+    return false;
+  }
 
   void refreshUser() {
     notifyListeners();
@@ -17,14 +33,13 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // MÉTODO SIMPLIFICADO Y SINCRONIZADO
+  // MÉTODO PARA ACTUALIZAR PERFIL
   Future<void> updateProfileData({
     required String name,
     required String phone,
     required String email,
     File? imageFile,
   }) async {
-    // Llamamos directamente al servicio enviando el archivo
     final success = await _authService.updateUserProfile(
       name: name,
       phone: phone,
@@ -33,7 +48,7 @@ class AuthProvider extends ChangeNotifier {
     );
 
     if (success) {
-      notifyListeners(); // Esto hará que el Side Menu y el Profile se refresquen
+      notifyListeners();
     } else {
       throw Exception("No se pudo actualizar el perfil");
     }

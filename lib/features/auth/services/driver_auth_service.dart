@@ -117,9 +117,12 @@ class DriverAuthService {
     required String password,
     required String passwordConfirmation,
     required String documento,
+    required String tipoDocumento, // <--- AGREGA ESTA LÍNEA
+
     required String fvLicencia,
     required File selfieFile,
     required File cedulaFile,
+    required File licenciaFile, // <--- NUEVO
   }) async {
     await _apiClient.simulateDelay();
 
@@ -131,17 +134,21 @@ class DriverAuthService {
     try {
       String selfieName = selfieFile.path.split('/').last;
       String cedulaName = cedulaFile.path.split('/').last;
+      String licenciaName = licenciaFile.path
+          .split('/')
+          .last; // <--- AGREGA ESTA LÍNEA
 
       final formData = FormData.fromMap({
         'nombre': name,
         'email': email,
         'telefono': phone,
         'documento': documento,
-        'n_licencia': documento, // Enviamos la cédula como número de licencia
+        'tipo_documento': tipoDocumento,
+        'n_licencia': documento,
         'fv_licencia': fvLicencia,
         'password': password,
         'password_confirmation': passwordConfirmation,
-        'role': 3, // Rol Conductor
+        'role': 3,
         'selfie': await MultipartFile.fromFile(
           selfieFile.path,
           filename: selfieName,
@@ -149,6 +156,10 @@ class DriverAuthService {
         'cedula_pdf': await MultipartFile.fromFile(
           cedulaFile.path,
           filename: cedulaName,
+        ),
+        'licencia_pdf': await MultipartFile.fromFile(
+          licenciaFile.path,
+          filename: licenciaName, // <--- AHORA YA NO DARÁ ERROR
         ),
       });
 

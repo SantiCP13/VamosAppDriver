@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:dart_pusher_channels/dart_pusher_channels.dart'; // <--- NUEVA LIBRERÍA
 import '../../../core/enums/payment_enums.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class PaymentSocketService {
   // 🚩 SWITCH: Cambia a 'false' cuando el backend en Laravel esté listo.
@@ -24,12 +25,11 @@ class PaymentSocketService {
     // =========================================================
     try {
       final options = PusherChannelsOptions.fromHost(
-        scheme: 'ws',
-        host: '10.0.2.2',
-        port: 8080,
-        key: '06exymiubefjjglwmvqe',
+        scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss',
+        host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
+        port: int.parse(dotenv.env['REVERB_PORT'] ?? '443'),
+        key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
       );
-
       // 🔥 CORRECCIÓN: Se añade el manejador de errores obligatorio
       _client = PusherChannelsClient.websocket(
         options: options,

@@ -18,7 +18,7 @@ class ApiClient {
   ApiClient._internal() {
     _dio = Dio(
       BaseOptions(
-        baseUrl: 'http://192.168.10.3:8000/api',
+        baseUrl: dotenv.env['API_URL'] ?? 'https://api.vamosapp.com.co/api',
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 15),
         headers: {

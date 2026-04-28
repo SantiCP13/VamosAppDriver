@@ -4,69 +4,84 @@ import 'package:provider/provider.dart';
 
 // Imports de Features
 import 'features/auth/screens/welcome_screen.dart';
+import 'features/home/screens/home_screen.dart';
 import 'features/home/providers/home_provider.dart';
 import 'features/wallet/providers/wallet_provider.dart';
 import 'features/auth/providers/auth_provider.dart';
 import 'features/history/providers/history_provider.dart'; // <--- 1. NUEVO IMPORT
-
+import 'core/theme/app_theme.dart'; // Importa el nuevo tema
+import 'package:intl/date_symbol_data_local.dart';
 import 'core/di/injection_container.dart' as di;
+import 'features/auth/screens/splash_screen.dart';
+import 'package:flutter/services.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  debugPrint("1 - Flutter iniciado");
-
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  // 1. Configuración básica
   try {
     await dotenv.load(fileName: ".env");
-    debugPrint("2 - dotenv cargado");
-  } catch (e) {
-    debugPrint("Nota: No se encontró archivo .env");
-  }
-
-  debugPrint("3 - antes de DI");
+  } catch (_) {}
 
   await di.init();
+  await initializeDateFormatting('es_ES', null);
 
-  debugPrint("4 - después de DI");
+  // 2. Lógica de Autenticación SEGURA
+  final authProvider = di.sl<AuthProvider>();
+
+  // Inicializamos en false por defecto
+  bool isAuthenticated = false;
+
+  try {
+    // Intentamos verificar el estado
+    isAuthenticated = await authProvider.checkAuthStatus();
+  } catch (e) {
+    debugPrint("Error verificando auth: $e");
+    isAuthenticated =
+        false; // Si falla el servidor, lo mandamos al login (Welcome)
+  }
 
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => di.sl<AuthProvider>()),
+        ChangeNotifierProvider.value(value: authProvider),
         ChangeNotifierProvider(create: (_) => di.sl<WalletProvider>()),
         ChangeNotifierProvider(create: (_) => di.sl<HistoryProvider>()),
         ChangeNotifierProvider(create: (_) => HomeProvider()),
       ],
-      child: const MyApp(),
+      // Forzamos que el resultado siempre sea un String no nulo
+      child: MyApp(initialRoute: isAuthenticated ? '/home' : '/'),
     ),
   );
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final String initialRoute; // Esta viene del login logic
+  const MyApp({super.key, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: navigatorKey,
-      title: 'Vamos Driver',
+      title: 'VAMOS Driver',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.black,
-          brightness: Brightness.light,
+      theme: AppTheme.lightTheme,
+      // MODIFICACIÓN AQUÍ:
+      initialRoute: '/splash',
+      routes: {
+        '/splash': (context) => SplashScreen(
+          logoPath: 'assets/images/logo.png',
+          nextRoute: initialRoute, // Nos mandará a / o a /home según el login
+          isDark: true,
         ),
-        useMaterial3: true,
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-          ),
-        ),
-      ),
-      home: const WelcomeScreen(),
+        '/': (context) => const WelcomeScreen(),
+        '/home': (context) => const HomeScreen(),
+      },
     );
   }
 }

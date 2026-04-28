@@ -2,14 +2,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:ui';
 
 import '../../../core/theme/app_colors.dart';
 import '../services/driver_auth_service.dart';
-import 'verification_check_screen.dart';
+import 'pending_approval_screen.dart'; // Import corregido
+import 'splash_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   final String? emailPreIngresado;
-
   const RegisterScreen({super.key, this.emailPreIngresado});
 
   @override
@@ -18,24 +19,30 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
+  bool _isLoading = false;
+  bool _obscurePass = true;
+  final _scrollController = ScrollController();
+  Map<String, bool> _fieldErrors = {};
 
-  // Controladores de texto
+  // Controladores
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _docCtrl = TextEditingController();
   final _fvLicenciaCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _confirmPassCtrl = TextEditingController(); // Nueva
 
-  // Archivos
+  String _tipoDocumento = 'CC'; // Nueva
+  bool _aceptaTerminos = false; // Nueva
+  bool _isPickerActive = false; // <--- FLAG PARA EVITAR CRASH
+
   File? _selfieFile;
   File? _cedulaFile;
+  File? _licenciaFile; // <--- AGREGA ESTA LÍNEA
+
   final ImagePicker _picker = ImagePicker();
-
   final _authService = DriverAuthService();
-
-  bool _isLoading = false;
-  bool _obscurePass = true;
 
   @override
   void initState() {
@@ -47,86 +54,124 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
     _docCtrl.dispose();
     _fvLicenciaCtrl.dispose();
     _passCtrl.dispose();
+    _confirmPassCtrl.dispose();
     super.dispose();
   }
 
-  // --- LÓGICA DE FOTOS ---
-  Future<void> _pickImage(bool isSelfie) async {
-    // Para selfie abrimos cámara frontal, para documento abrimos cámara trasera o galería
-    final XFile? image = await _picker.pickImage(
-      source: isSelfie ? ImageSource.camera : ImageSource.gallery,
-      imageQuality: 70, // Comprimimos un poco para que no pese tanto
-      preferredCameraDevice: isSelfie ? CameraDevice.front : CameraDevice.rear,
-    );
+  bool _isValidEmail(String email) =>
+      RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email);
 
-    if (image != null) {
-      setState(() {
-        if (isSelfie) {
-          _selfieFile = File(image.path);
-        } else {
-          _cedulaFile = File(image.path);
-        }
-      });
+  // Cambia el método para aceptar un entero o un enum para identificar el archivo
+  Future<void> _pickImage(int type) async {
+    if (_isPickerActive) return; // Si ya hay uno abriéndose, ignorar
+
+    setState(() => _isPickerActive = true);
+
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: type == 0 ? ImageSource.camera : ImageSource.gallery,
+        imageQuality: 60, // Comprimimos un poco para el server
+      );
+
+      if (image != null) {
+        setState(() {
+          if (type == 0) _selfieFile = File(image.path);
+          if (type == 1) _cedulaFile = File(image.path);
+          if (type == 2) _licenciaFile = File(image.path);
+        });
+      }
+    } finally {
+      setState(() => _isPickerActive = false); // Liberar siempre al terminar
     }
   }
 
-  // --- LÓGICA DE FECHA ---
   Future<void> _selectDate() async {
     final picked = await showDatePicker(
       context: context,
       initialDate: DateTime.now().add(const Duration(days: 30)),
       firstDate: DateTime.now(),
       lastDate: DateTime(2050),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: AppColors.primaryGreen,
-            ),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: AppColors.primaryGreen,
+            onPrimary: Colors.white,
+            surface: AppColors.surfaceDark,
           ),
-          child: child!,
-        );
-      },
+        ),
+        child: child!,
+      ),
     );
     if (picked != null) {
       setState(() {
         _fvLicenciaCtrl.text =
             "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+        _fieldErrors['licencia'] = false;
       });
     }
   }
 
-  // --- SUBMIT ---
   Future<void> _handleRegister() async {
-    // 1. Validar Textos
-    if (!_formKey.currentState!.validate()) {
-      _showSnack("Por favor revisa los campos en rojo", isError: true);
-      return;
+    String? errorDetail;
+    setState(() => _fieldErrors = {});
+
+    // 1. Validaciones Premium
+    if (_nameCtrl.text.trim().length < 3) {
+      _fieldErrors['nombre'] = true;
+      errorDetail = "Escribe tu nombre completo.";
+    } else if (_docCtrl.text.length < 6) {
+      _fieldErrors['documento'] = true;
+      errorDetail = "Cédula inválida.";
+    } else if (_phoneCtrl.text.length != 10) {
+      _fieldErrors['telefono'] = true;
+      errorDetail = "El celular debe tener 10 dígitos.";
+    } else if (!_isValidEmail(_emailCtrl.text)) {
+      _fieldErrors['email'] = true;
+      errorDetail = "Formato de email inválido.";
+    } else if (_fvLicenciaCtrl.text.isEmpty) {
+      _fieldErrors['licencia'] = true;
+      errorDetail = "Selecciona la fecha de vencimiento.";
+    } else if (_passCtrl.text.length < 8) {
+      _fieldErrors['password'] = true;
+      errorDetail = "Mínimo 8 caracteres para la contraseña.";
+    } else if (_passCtrl.text != _confirmPassCtrl.text) {
+      _fieldErrors['confirmPassword'] = true;
+      errorDetail = "Las contraseñas no coinciden.";
+    } else if (_selfieFile == null ||
+        _cedulaFile == null ||
+        _licenciaFile == null) {
+      errorDetail = "Debes subir la selfie, la cédula y la licencia.";
+    } else if (!_aceptaTerminos) {
+      errorDetail = "Debes autorizar el tratamiento de datos personales.";
     }
 
-    // 2. Validar Fotos
-    if (_selfieFile == null || _cedulaFile == null) {
-      _showSnack(
-        "Debes adjuntar tu Selfie y la foto de tu Documento",
-        isError: true,
+    if (errorDetail != null) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOutCubic,
       );
+      _showSnack(errorDetail, isError: true);
       return;
     }
 
+    // 2. ACTIVAR SPLASH DE CARGA
     setState(() => _isLoading = true);
-
-    // Modal inamovible
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: AppColors.primaryGreen),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const SplashScreen(
+          logoPath: 'assets/images/logo.png',
+          isLoader: true,
+          isDark: true,
+        ),
       ),
     );
 
@@ -136,140 +181,462 @@ class _RegisterScreenState extends State<RegisterScreen> {
         email: _emailCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         password: _passCtrl.text.trim(),
-        passwordConfirmation: _passCtrl.text.trim(),
+        passwordConfirmation: _confirmPassCtrl.text.trim(),
         documento: _docCtrl.text.trim(),
+        tipoDocumento: _tipoDocumento, // Agregado
         fvLicencia: _fvLicenciaCtrl.text.trim(),
         selfieFile: _selfieFile!,
         cedulaFile: _cedulaFile!,
+        licenciaFile: _licenciaFile!, // <--- AGREGA ESTA LÍNEA
       );
 
       if (!mounted) return;
+      Navigator.pop(context); // Cerrar Splash
 
-      Navigator.of(context).pop();
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
+        MaterialPageRoute(
+          builder: (_) =>
+              const PendingApprovalScreen(), // <--- QUITA EL isNatural: true
+        ),
       );
     } catch (e) {
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      String msg = e.toString().replaceAll('Exception: ', '');
-      _showSnack(msg, isError: true);
+      if (mounted) Navigator.pop(context);
+      _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- UI HELPERS ---
   void _showSnack(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.only(bottom: 30, left: 40, right: 40),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: isError
-            ? const Color(0xFFE53935)
+            ? const Color(0xFFD32F2F)
             : AppColors.primaryGreen,
-        content: Row(
-          children: [
-            Icon(
-              isError ? Icons.cancel_outlined : Icons.check_circle_outline,
-              color: Colors.white,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(msg, style: GoogleFonts.poppins(color: Colors.white)),
-            ),
-          ],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        content: Text(
+          msg,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
   }
 
-  InputDecoration _getInputStyle({
-    required String label,
-    required IconData icon,
-    Widget? suffixIcon,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: GoogleFonts.poppins(
-        fontSize: 14,
-        color: Colors.grey.shade600,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D121F),
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: Container(
+          margin: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              size: 18,
+              color: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
       ),
-      prefixIcon: Icon(icon, size: 20, color: AppColors.primaryGreen),
-      filled: true,
-      fillColor: Colors.grey.shade50,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+      body: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0.0, -0.45),
+                radius: 1.8,
+                colors: [Color(0xFF25335A), Color(0xFF0D121F)],
+              ),
+            ),
+          ),
+          SafeArea(
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 28.0),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 20),
+                    Text(
+                      "Únete al Equipo",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.primaryGreen,
+                        letterSpacing: -1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      "Activa tu perfil profesional y empieza a generar ingresos.",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 13,
+                        color: Colors.white.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    const SizedBox(height: 40),
+
+                    _buildSectionHeader("Información Personal"),
+                    const SizedBox(height: 20),
+                    _buildPremiumField(
+                      _nameCtrl,
+                      "Nombre Completo",
+                      Icons.person_outline,
+                      fieldKey: 'nombre',
+                    ),
+
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 2, child: _buildIdTypeDropdown()),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 4,
+                          child: _buildPremiumField(
+                            _docCtrl,
+                            "Número ID",
+                            Icons.badge_outlined,
+                            type: TextInputType.number,
+                            fieldKey: 'documento',
+                            maxLength: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    _buildPremiumField(
+                      _phoneCtrl,
+                      "Número de Celular",
+                      Icons.phone_android_outlined,
+                      type: TextInputType.phone,
+                      fieldKey: 'telefono',
+                      maxLength: 10,
+                    ),
+                    _buildPremiumField(
+                      _emailCtrl,
+                      "Email",
+                      Icons.alternate_email,
+                      type: TextInputType.emailAddress,
+                      fieldKey: 'email',
+                    ),
+                    _buildPremiumField(
+                      _fvLicenciaCtrl,
+                      "Vencimiento Licencia",
+                      Icons.calendar_today_rounded,
+                      readOnly: true,
+                      onTap: _selectDate,
+                      fieldKey: 'licencia',
+                    ),
+                    _buildPremiumField(
+                      _passCtrl,
+                      "Contraseña",
+                      Icons.lock_outline_rounded,
+                      isPass: true,
+                      fieldKey: 'password',
+                    ),
+                    _buildPremiumField(
+                      _confirmPassCtrl,
+                      "Confirmar Contraseña",
+                      Icons.lock_reset_rounded,
+                      isPass: true,
+                      fieldKey: 'confirmPassword',
+                    ),
+
+                    const SizedBox(height: 30),
+                    _buildSectionHeader("Validación de Identidad"),
+                    const SizedBox(height: 20),
+                    _buildFileCard(
+                      "Selfie de Verificación",
+                      Icons.face_unlock_rounded,
+                      _selfieFile != null,
+                      () => _pickImage(0),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildFileCard(
+                      "Foto de Cédula",
+                      Icons.badge_outlined,
+                      _cedulaFile != null,
+                      () => _pickImage(1),
+                    ),
+                    const SizedBox(height: 12),
+
+                    _buildFileCard(
+                      "Licencia de Conducción", // <--- NUEVO CARD
+                      Icons.drive_eta_rounded,
+                      _licenciaFile != null,
+                      () => _pickImage(2),
+                    ),
+
+                    const SizedBox(height: 20),
+                    _buildAceptacionDatos(),
+                    const SizedBox(height: 40),
+                    _buildSubmitButton(),
+                    const SizedBox(height: 50),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey.shade200),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primaryGreen, width: 1.5),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      suffixIcon: suffixIcon,
     );
   }
 
-  // Widget para los botones de subir archivos
-  Widget _buildFilePickerBtn({
-    required String title,
-    required IconData icon,
-    required bool isSelfie,
-    required File? file,
+  Widget _buildSectionHeader(String title) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.primaryGreen.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        title.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          fontWeight: FontWeight.w800,
+          fontSize: 11,
+          color: AppColors.primaryGreen,
+          letterSpacing: 2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIdTypeDropdown() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 8),
+          child: Text(
+            "Tipo",
+            style: GoogleFonts.montserrat(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Colors.white.withValues(alpha: 0.7),
+            ),
+          ),
+        ),
+        Container(
+          height: 62,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          ),
+          child: Center(
+            child: DropdownButton<String>(
+              value: _tipoDocumento,
+              dropdownColor: AppColors.surfaceDark,
+              isExpanded: true,
+              underline: const SizedBox(),
+              icon: const Icon(
+                Icons.keyboard_arrow_down,
+                color: AppColors.primaryGreen,
+              ),
+              items: ['CC', 'CE', 'PPT'].map((String value) {
+                return DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(
+                    value,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                );
+              }).toList(),
+              onChanged: (val) => setState(() => _tipoDocumento = val!),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPremiumField(
+    TextEditingController ctrl,
+    String label,
+    IconData icon, {
+    TextInputType type = TextInputType.text,
+    bool readOnly = false,
+    VoidCallback? onTap,
+    bool isPass = false,
+    String? fieldKey,
+    int? maxLength,
   }) {
-    bool hasFile = file != null;
+    bool hasError = fieldKey != null && (_fieldErrors[fieldKey] ?? false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 8),
+          child: Text(
+            label,
+            style: GoogleFonts.montserrat(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: hasError ? Colors.redAccent : Colors.white70,
+            ),
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 20),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: hasError
+                  ? Colors.red.withValues(alpha: 0.6)
+                  : Colors.transparent,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+              child: TextFormField(
+                controller: ctrl,
+                readOnly: readOnly,
+                onTap: onTap,
+                obscureText: isPass && _obscurePass,
+                keyboardType: type,
+                maxLength: maxLength,
+                onChanged: (val) {
+                  if (fieldKey != null && hasError) {
+                    // <--- Asegúrate de que tenga las llaves
+                    setState(() => _fieldErrors[fieldKey] = false);
+                  }
+                },
+                style: GoogleFonts.montserrat(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                ),
+                decoration: InputDecoration(
+                  counterText: "",
+                  hintText: "Escribe aquí...",
+                  hintStyle: GoogleFonts.montserrat(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.3),
+                  ),
+                  prefixIcon: Icon(
+                    icon,
+                    color: hasError ? Colors.redAccent : AppColors.primaryGreen,
+                    size: 22,
+                  ),
+                  suffixIcon: isPass
+                      ? IconButton(
+                          icon: Icon(
+                            _obscurePass
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: Colors.white54,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePass = !_obscurePass),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.05),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: const BorderSide(
+                      color: AppColors.primaryGreen,
+                      width: 2,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 22,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFileCard(
+    String title,
+    IconData icon,
+    bool hasFile,
+    VoidCallback onTap,
+  ) {
     return InkWell(
-      onTap: () => _pickImage(isSelfie),
-      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
       child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: hasFile
-              ? AppColors.primaryGreen.withValues(alpha: 0.1)
-              : Colors.grey.shade50,
+              ? AppColors.primaryGreen.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: hasFile ? AppColors.primaryGreen : Colors.grey.shade300,
-            width: 1.5,
+            color: hasFile
+                ? AppColors.primaryGreen
+                : Colors.white.withValues(alpha: 0.1),
           ),
-          borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           children: [
             Icon(
-              hasFile ? Icons.check_circle : icon,
-              color: hasFile ? AppColors.primaryGreen : Colors.grey.shade600,
-              size: 28,
+              hasFile ? Icons.check_circle_rounded : icon,
+              color: hasFile ? AppColors.primaryGreen : Colors.white54,
+              size: 30,
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 20),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.w600,
-                      color: const Color.fromARGB(221, 1, 26, 85),
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                   Text(
                     hasFile
-                        ? "Archivo cargado con éxito"
-                        : "Toca para subir o tomar foto",
-                    style: GoogleFonts.poppins(
+                        ? "Documento cargado"
+                        : "Toca para subir el archivo",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white54,
                       fontSize: 12,
-                      color: hasFile
-                          ? AppColors.primaryGreen
-                          : Colors.grey.shade500,
                     ),
                   ),
                 ],
@@ -281,173 +648,63 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: const BackButton(color: Colors.black),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Únete al equipo",
-                  style: GoogleFonts.poppins(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryGreen,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0, bottom: 20),
-                  child: Text(
-                    "Completa tus datos y sube tus documentos para empezar a conducir.",
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ),
-
-                // --- TEXTOS ---
-                TextFormField(
-                  controller: _nameCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: _getInputStyle(
-                    label: "Nombre Completo",
-                    icon: Icons.person_outline,
-                  ),
-                  validator: (v) => v!.isEmpty ? 'Requerido' : null,
-                ),
-                const SizedBox(height: 16),
-
-                TextFormField(
-                  controller: _docCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: _getInputStyle(
-                    label: "Cédula de Ciudadanía",
-                    icon: Icons.badge_outlined,
-                  ),
-                  validator: (v) => v!.isEmpty ? 'Requerido' : null,
-                ),
-                const SizedBox(height: 16),
-
-                TextFormField(
-                  controller: _phoneCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration: _getInputStyle(
-                    label: "Celular",
-                    icon: Icons.phone_android_outlined,
-                  ),
-                  validator: (v) => v!.length < 10 ? 'Número inválido' : null,
-                ),
-                const SizedBox(height: 16),
-
-                TextFormField(
-                  controller: _emailCtrl,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: _getInputStyle(
-                    label: "Correo electrónico",
-                    icon: Icons.alternate_email,
-                  ),
-                  validator: (v) => !v!.contains('@') ? 'Inválido' : null,
-                ),
-                const SizedBox(height: 16),
-
-                TextFormField(
-                  controller: _fvLicenciaCtrl,
-                  readOnly: true,
-                  onTap: _selectDate,
-                  decoration: _getInputStyle(
-                    label: "Fecha Vencimiento Licencia",
-                    icon: Icons.calendar_month_outlined,
-                  ),
-                  validator: (v) => v!.isEmpty ? 'Requerido' : null,
-                ),
-                const SizedBox(height: 24),
-
-                // --- CONTRASEÑAS ---
-                TextFormField(
-                  controller: _passCtrl,
-                  obscureText: _obscurePass,
-                  decoration: _getInputStyle(
-                    label: "Crear Contraseña",
-                    icon: Icons.lock_outline,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePass ? Icons.visibility_off : Icons.visibility,
-                        color: Colors.grey,
-                      ),
-                      onPressed: () =>
-                          setState(() => _obscurePass = !_obscurePass),
-                    ),
-                  ),
-                  validator: (v) =>
-                      v!.length < 8 ? 'Mínimo 8 caracteres' : null,
-                ),
-                const SizedBox(height: 16),
-
-                const SizedBox(height: 40),
-                // --- ARCHIVOS ---
-                Text(
-                  "Documentos Requeridos",
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                _buildFilePickerBtn(
-                  title: "Selfie del Conductor",
-                  icon: Icons.camera_front_outlined,
-                  isSelfie: true,
-                  file: _selfieFile,
-                ),
-                const SizedBox(height: 12),
-
-                _buildFilePickerBtn(
-                  title: "PDF con Cédula y Licencia",
-                  icon: Icons.document_scanner_outlined,
-                  isSelfie: false,
-                  file: _cedulaFile,
-                ),
-                const SizedBox(height: 24),
-
-                // --- BOTÓN ---
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _handleRegister,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                    ),
-                    child: Text(
-                      "REGISTRARME Y ENVIAR",
-                      style: GoogleFonts.poppins(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+  Widget _buildAceptacionDatos() {
+    return Row(
+      children: [
+        Checkbox(
+          value: _aceptaTerminos,
+          activeColor: AppColors.primaryGreen,
+          side: const BorderSide(color: Colors.white54),
+          onChanged: (val) => setState(() => _aceptaTerminos = val ?? false),
+        ),
+        Expanded(
+          child: Text(
+            "Autorizo el tratamiento de mis datos personales (Ley 1581).",
+            style: GoogleFonts.montserrat(
+              fontSize: 11,
+              color: Colors.white70,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildSubmitButton() {
+    return Container(
+      width: double.infinity,
+      height: 65,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGreen.withValues(alpha: 0.35),
+            blurRadius: 25,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: _isLoading ? null : _handleRegister,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primaryGreen,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          elevation: 0,
+        ),
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : Text(
+                "REGISTRARME AHORA",
+                style: GoogleFonts.montserrat(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 1.5,
+                ),
+              ),
       ),
     );
   }

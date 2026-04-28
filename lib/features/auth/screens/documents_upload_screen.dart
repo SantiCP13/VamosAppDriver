@@ -118,102 +118,98 @@ class _DocumentsUploadScreenState extends State<DocumentsUploadScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.darkBlue,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        centerTitle: true,
-        // Botón de regreso al registro
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black87),
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           'Documentación',
-          style: GoogleFonts.poppins(
-            color: Colors.black87,
-            fontWeight: FontWeight.w600,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
           ),
         ),
         actions: [
+          // SOLUCIÓN AL ERROR: Botón para usar la función simuladora
           IconButton(
-            icon: const Icon(Icons.bug_report, color: Colors.grey),
-            tooltip: 'Simular Archivos (Dev)',
+            icon: const Icon(Icons.bug_report_outlined, color: Colors.white30),
             onPressed: _simulateFilesForEmulator,
+            tooltip: "Simular archivos (Modo Dev)",
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Column(
-                children: [
-                  Text(
-                    'Verificación de Identidad',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Para habilitarte, sube tu Cédula y Licencia en formato PDF.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+      body: Stack(
+        children: [
+          // Fondo oscuro igual al registro
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0.0, -0.45),
+                radius: 1.8,
+                colors: [AppColors.surfaceDark, AppColors.darkBlue],
               ),
             ),
-
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 10,
-                ),
-                children: _labels.entries.map((entry) {
-                  return _buildUploadCard(entry.key, entry.value);
-                }).toList(),
-              ),
-            ),
-
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submitAll,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 2,
-                    disabledBackgroundColor: Colors.grey[300],
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 20,
                   ),
-                  child: _isSubmitting
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(
-                          'ENVIAR A REVISIÓN',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
+                  child: Column(
+                    children: [
+                      const Icon(
+                        Icons.verified_user_outlined,
+                        color: AppColors.primaryGreen,
+                        size: 50,
+                      ),
+                      const SizedBox(height: 15),
+                      Text(
+                        'Verificación Legal',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
                         ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Para habilitarte como conductor profesional, necesitamos estos documentos en PDF.',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 13,
+                          color: Colors.white60,
+                          height: 1.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 10,
+                    ),
+                    children: _labels.entries.map((entry) {
+                      return _buildUploadCard(entry.key, entry.value);
+                    }).toList(),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(28.0),
+                  child: _buildSubmitButton(),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -222,94 +218,84 @@ class _DocumentsUploadScreenState extends State<DocumentsUploadScreen> {
     final file = _documents[key];
     final bool isUploaded = file != null;
 
-    final borderColor = isUploaded
-        ? AppColors.primaryGreen
-        : Colors.grey.shade300;
-
-    // Solución compatible para opacidad
-    final bgColor = isUploaded
-        ? AppColors.primaryGreen.withValues(alpha: 0.5)
-        : Colors.white;
-
-    final iconColor = isUploaded
-        ? AppColors.primaryGreen
-        : Colors.grey.shade400;
-
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor, width: 1.5),
+        color: isUploaded
+            ? AppColors.primaryGreen.withValues(alpha: 0.1)
+            : Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isUploaded ? AppColors.primaryGreen : Colors.white10,
+          width: 1.5,
+        ),
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _pickFile(key),
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: isUploaded ? Colors.white : Colors.grey.shade50,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isUploaded
-                          ? AppColors.primaryGreen.withValues(alpha: 0.2)
-                          : Colors.transparent,
-                    ),
-                  ),
-                  child: Icon(
-                    isUploaded
-                        ? Icons.check_rounded
-                        : Icons.cloud_upload_outlined,
-                    color: iconColor,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label,
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        isUploaded
-                            ? (file.name.length > 25
-                                  ? '${file.name.substring(0, 25)}...'
-                                  : file.name)
-                            : 'Toca para seleccionar PDF',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: isUploaded
-                              ? AppColors.primaryGreen
-                              : Colors.grey[500],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (isUploaded)
-                  const Icon(
-                    Icons.picture_as_pdf, // Icono exclusivo PDF
-                    color: Colors.redAccent,
-                    size: 24,
-                  ),
-              ],
-            ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(15),
+        leading: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isUploaded
+                ? AppColors.primaryGreen
+                : Colors.white.withValues(alpha: 0.05),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            isUploaded ? Icons.task_alt_rounded : Icons.picture_as_pdf_rounded,
+            color: Colors.white,
           ),
         ),
+        title: Text(
+          label,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        subtitle: Text(
+          isUploaded ? file.name : "Click para seleccionar PDF",
+          style: GoogleFonts.montserrat(
+            color: isUploaded ? AppColors.primaryGreen : Colors.white38,
+            fontSize: 12,
+          ),
+        ),
+        onTap: () => _pickFile(key),
+      ),
+    );
+  }
+
+  Widget _buildSubmitButton() {
+    return Container(
+      width: double.infinity,
+      height: 60,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGreen.withValues(alpha: 0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: _isSubmitting ? null : _submitAll,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primaryGreen,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+        ),
+        child: _isSubmitting
+            ? const CircularProgressIndicator(color: Colors.white)
+            : Text(
+                'ENVIAR DOCUMENTACIÓN',
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 1.2,
+                ),
+              ),
       ),
     );
   }

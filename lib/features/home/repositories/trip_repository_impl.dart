@@ -14,6 +14,7 @@ import '../../../core/services/storage_service.dart';
 import '../../auth/providers/auth_provider.dart';
 import 'trip_repository.dart';
 import '../../../core/enums/payment_enums.dart'; // <--- 1. AGREGA ESTA LÍNEA
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class ApiTripRepository implements TripRepository {
   final ApiClient _api = ApiClient();
@@ -73,14 +74,15 @@ class ApiTripRepository implements TripRepository {
       }
       _client = PusherChannelsClient.websocket(
         options: PusherChannelsOptions.fromHost(
-          scheme: 'ws',
-          host: '10.0.2.2', // IP para emulador
-          port: 8080,
-          key: '06exymiubefjjglwmvqe',
+          scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss', // 'wss' para SSL
+          host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
+          port: int.parse(
+            dotenv.env['REVERB_PORT'] ?? '443',
+          ), // Puerto 443 para HTTPS
+          key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
         ),
-        // ✅ Quitamos el authorizationDelegate de aquí (error línea 67)
         connectionErrorHandler: (exception, trace, client) =>
-            debugPrint("❌ Error Socket: $exception"),
+            debugPrint("❌ Error Socket en Producción: $exception"),
       );
 
       _client!.eventStream.listen((event) {
@@ -261,7 +263,7 @@ class MyPusherAuth
   ) async {
     try {
       final response = await dio.post(
-        'http://10.0.2.2:8000/api/broadcasting/auth',
+        'https://api.vamosapp.com.co/api/broadcasting/auth',
         data: {'socket_id': socketId, 'channel_name': channelName},
         options: Options(
           headers: {
