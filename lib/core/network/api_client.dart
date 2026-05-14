@@ -1,26 +1,24 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:developer' as developer;
-import '../../main.dart';
+
+// Imports necesarios para la lógica
 import '../di/injection_container.dart';
-import '../../features/auth/providers/auth_provider.dart';
-import '../../features/auth/screens/welcome_screen.dart';
-import 'package:flutter/material.dart';
-import '../services/storage_service.dart'; // <--- IMPORTANTE
+import '../services/storage_service.dart';
+import '../navigation/navigation_service.dart'; // <--- ESTE TE FALTABA
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
   factory ApiClient() => _instance;
 
   late Dio _dio;
-  // Borramos la variable _storage de aquí
 
   ApiClient._internal() {
     _dio = Dio(
       BaseOptions(
         baseUrl: dotenv.env['API_URL'] ?? 'https://api.vamosapp.com.co/api',
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 15),
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -31,17 +29,32 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
-          developer.log(
-            '🚀 [${options.method}] ${options.path}',
-            name: 'API_REQ',
-          );
-
-          // 🔥 CORRECCIÓN CRÍTICA: Leemos desde el StorageService (SharedPreferences)
           final storage = sl<StorageService>();
           final token = await storage.getToken();
 
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
+          } else {
+            // --- MODIFICACIÓN AQUÍ ---
+            // Definimos las rutas públicas (las que no requieren token)
+            final publicPaths = [
+              '/login',
+              '/register',
+              '/check-account',
+              '/password/email', // <--- AGREGADO
+              '/password/code/check', // <--- AGREGADO
+              '/password/reset', // <--- AGREGADO
+            ];
+
+            if (!publicPaths.contains(options.path)) {
+              return handler.reject(
+                DioException(
+                  requestOptions: options,
+                  error: 'No hay token disponible',
+                  type: DioExceptionType.cancel,
+                ),
+              );
+            }
           }
           return handler.next(options);
         },
@@ -52,21 +65,31 @@ class ApiClient {
           );
           return handler.next(response);
         },
-        onError: (DioException e, handler) {
-          developer.log(
-            '❌ ERROR EN: ${e.requestOptions.path} | STATUS: ${e.response?.statusCode}',
-            name: 'API_DEBUG',
-          );
+        onError: (DioException e, handler) async {
+          developer.log('❌ ERROR: ${e.requestOptions.path}', name: 'API_DEBUG');
 
+          // OBTENEMOS EL PATH COMPLETO PARA ASEGURAR QUE NO HAYA CONFUSIONES
+          final path = e.requestOptions.path;
+
+          // Blindaje mejorado: usamos una lista para ser más ordenados
+          final protectedPaths = [
+            '/responder',
+            '/cancelar',
+            '/iniciar',
+            '/viajes/',
+            '/asignaciones/', // <--- AGREGADO: Es fundamental para el rechazo
+          ];
+
+          // Si el path contiene alguno de los protegidos, NO hagas logout
+          if (protectedPaths.any((p) => path.contains(p))) {
+            return handler.next(e);
+          }
+
+          // Solo hacer logout si es un 401 real y NO es una ruta protegida
           if (e.response?.statusCode == 401) {
-            // Si falla el token, cerramos sesión
-            sl<AuthProvider>().logout();
-            if (navigatorKey.currentState != null) {
-              navigatorKey.currentState!.pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-                (route) => false,
-              );
-            }
+            await sl<StorageService>().deleteAll();
+            NavigationService.navigatorKey.currentState
+                ?.pushNamedAndRemoveUntil('/', (route) => false);
           }
           return handler.next(e);
         },

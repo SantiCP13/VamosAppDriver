@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:ui';
 import '../../../core/theme/app_colors.dart';
-import 'welcome_screen.dart';
+import 'splash_screen.dart';
 
 class PendingApprovalScreen extends StatelessWidget {
   const PendingApprovalScreen({super.key});
@@ -151,9 +151,23 @@ class PendingApprovalScreen extends StatelessWidget {
       height: 60,
       child: ElevatedButton(
         onPressed: () {
+          // Usamos pushAndRemoveUntil para limpiar todo el historial de pantallas
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+            PageRouteBuilder(
+              transitionDuration: const Duration(milliseconds: 600),
+              pageBuilder: (context, animation, secondaryAnimation) =>
+                  const SplashScreen(
+                    logoPath: 'assets/images/logo.png',
+                    nextRoute:
+                        '', // Al dejarlo vacío o diferente a /home /register, irá al Welcome por defecto
+                    isDark: true, // Mantenemos el estilo Dark de Driver
+                  ),
+              transitionsBuilder:
+                  (context, animation, secondaryAnimation, child) {
+                    return FadeTransition(opacity: animation, child: child);
+                  },
+            ),
             (route) => false,
           );
         },

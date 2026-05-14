@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../../core/models/trip_model.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:provider/provider.dart'; // <--- ESTE TE FALTA
+import '../providers/home_provider.dart';
 
 class TripRequestSheet extends StatelessWidget {
   final Trip trip;
@@ -17,6 +19,12 @@ class TripRequestSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (trip.id == '0' || trip.status == TripStatus.CANCELLED) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => Navigator.pop(context),
+      );
+      return const SizedBox.shrink();
+    }
     final double totalPeajes = (trip.legalSnapshot?['total_peajes'] ?? 0)
         .toDouble();
     final bool tienePeajes = totalPeajes > 0;
@@ -117,9 +125,17 @@ class TripRequestSheet extends StatelessWidget {
 
           Row(
             children: [
+              // En la fila de botones (al final de TripRequestSheet)
               Expanded(
                 child: TextButton(
-                  onPressed: onReject,
+                  onPressed: () {
+                    // AQUÍ ESTÁ EL CAMBIO:
+                    Provider.of<HomeProvider>(
+                      context,
+                      listen: false,
+                    ).rejectIncomingTrip();
+                    Navigator.pop(context); // Cerramos el modal de oferta
+                  },
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 18),
                   ),

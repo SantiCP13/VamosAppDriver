@@ -12,6 +12,8 @@ class TransactionModel {
   final bool isCredit; // true = Entrada (+), false = Salida (-)
   final TransactionType type;
   final String? referenceId; // Trip ID o Withdrawal ID
+  final String? paymentMethod; // Agregado
+  final double? netEarnings; // Agregado
 
   TransactionModel({
     required this.id,
@@ -23,6 +25,8 @@ class TransactionModel {
     required this.isCredit,
     this.type = TransactionType.TRIP_PAYMENT,
     this.referenceId,
+    this.paymentMethod,
+    this.netEarnings,
   });
 
   // --- NUEVO: MÉTODO PARA CONECTAR CON LARAVEL ---
@@ -43,6 +47,8 @@ class TransactionModel {
       // Mapeamos al Enum según el tipo
       type: ingreso ? TransactionType.ADJUSTMENT : TransactionType.TRIP_PAYMENT,
       referenceId: map['id_pago']?.toString(),
+      paymentMethod: map['payment_method'] ?? 'N/A',
+      netEarnings: double.tryParse(map['net_earnings']?.toString() ?? '0'),
     );
   }
 }

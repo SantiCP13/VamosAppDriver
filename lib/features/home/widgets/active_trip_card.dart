@@ -105,7 +105,24 @@ class ActiveTripCard extends StatelessWidget {
                       ),
               ),
             ),
-
+            if (trip.status ==
+                TripStatus.ACCEPTED) // Solo cancelar si está en estado Aceptado
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.red),
+                    ),
+                    onPressed: () => homeProvider.cancelTripAsDriver(trip.id),
+                    child: const Text(
+                      "CANCELAR VIAJE",
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ),
+                ),
+              ),
             // Botón Navegación
             Center(
               child: TextButton.icon(

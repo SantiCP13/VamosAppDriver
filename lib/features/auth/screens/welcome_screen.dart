@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
-import 'register_screen.dart';
+import 'splash_screen.dart'; // Importante
 import 'dart:ui';
 
 class WelcomeScreen extends StatefulWidget {
@@ -14,33 +14,13 @@ class WelcomeScreen extends StatefulWidget {
   State<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
-class _WelcomeScreenState extends State<WelcomeScreen>
-    with SingleTickerProviderStateMixin {
+class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isLoading = true;
-  late AnimationController _expansionController;
-  late Animation<double> _expansionAnimation;
-  bool _isNavigating = false;
 
   @override
   void initState() {
     super.initState();
-    _expansionController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-
-    _expansionAnimation = CurvedAnimation(
-      parent: _expansionController,
-      curve: Curves.easeInOutCubic,
-    );
-
     _checkStatus();
-  }
-
-  @override
-  void dispose() {
-    _expansionController.dispose();
-    super.dispose();
   }
 
   Future<void> _checkStatus() async {
@@ -49,28 +29,20 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     if (mounted) setState(() => _isLoading = false);
   }
 
-  void _navigateTo(Widget screen) async {
-    setState(() => _isNavigating = true);
-    await _expansionController.forward();
-    if (mounted) {
-      // TRANSICIÓN SUAVE (FADE)
-      Navigator.push(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => screen,
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: CurvedAnimation(parent: animation, curve: Curves.easeIn),
-              child: child,
-            );
-          },
-          transitionDuration: const Duration(milliseconds: 700),
-        ),
-      ).then((_) {
-        _expansionController.reverse();
-        setState(() => _isNavigating = false);
-      });
-    }
+  void _navigateTo(Widget screen) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => screen,
+        transitionDuration: const Duration(milliseconds: 600),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeIn),
+            child: child,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -96,104 +68,87 @@ class _WelcomeScreenState extends State<WelcomeScreen>
               ),
             ),
             child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(
-                  children: [
-                    const Spacer(flex: 2),
-                    _buildFadeIn(
-                      delay: 0,
-                      child: Hero(
-                        tag: 'logo',
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          height: 250,
-                          fit: BoxFit.contain,
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    children: [
+                      const SizedBox(
+                        height: 100,
+                      ), // Espaciado manual para control total
+                      _buildFadeIn(
+                        delay: 0,
+                        child: Hero(
+                          tag: 'logo',
+                          // ESTO ACTIVA EL MOVIMIENTO EN CURVA:
+                          createRectTween: (begin, end) {
+                            return MaterialRectArcTween(begin: begin, end: end);
+                          },
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            height: 220,
+                            fit: BoxFit.contain,
+                          ),
                         ),
                       ),
-                    ),
 
-                    const SizedBox(height: 10),
-                    _buildFadeIn(
-                      delay: 200,
-                      child: Text(
-                        "Gestiona tus servicios corporativos y cumple la normativa legal con tecnología de punta.",
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 15,
-                          color: Colors.white.withValues(alpha: 0.6),
-                          height: 1.6,
-                          fontWeight: FontWeight.w500,
+                      const SizedBox(height: 10),
+                      _buildFadeIn(
+                        delay: 200,
+                        child: Text(
+                          "Gestiona tus servicios corporativos y cumple la normativa legal con tecnología de punta.",
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.montserrat(
+                            fontSize: 15,
+                            // ignore: deprecated_member_use
+                            color: Colors.white.withOpacity(0.6),
+                            height: 1.6,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 80),
-                    Text(
-                      "PANEL DE ACCESO",
-                      style: GoogleFonts.montserrat(
-                        fontSize: 15,
-                        color: AppColors.primaryGreen,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 3,
+                      const SizedBox(height: 80),
+                      Text(
+                        "PANEL DE ACCESO",
+                        style: GoogleFonts.montserrat(
+                          fontSize: 13, // Igualado a User
+                          color: AppColors.primaryGreen,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 3,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 25),
-                    _buildFadeIn(
-                      delay: 400,
-                      child: _buildRoleButton(
-                        label: "Iniciar Sesión",
-                        subLabel: "Ya soy parte de la flota",
-                        icon: Icons.vpn_key_rounded,
-                        isPrimary: true,
-                        destination: const LoginScreen(),
+                      const SizedBox(height: 25),
+                      _buildFadeIn(
+                        delay: 400,
+                        child: _buildRoleButton(
+                          label: "Iniciar Sesión",
+                          subLabel: "Ya soy parte de la flota",
+                          icon: Icons.vpn_key_rounded,
+                          isPrimary: true,
+                          destination: const LoginScreen(),
+                        ),
                       ),
-                    ),
-                    _buildFadeIn(
-                      delay: 600,
-                      child: _buildRoleButton(
-                        label: "Registrarme",
-                        subLabel: "Quiero unirme a Vamos",
-                        icon: Icons.add_business_rounded,
-                        isPrimary: false,
-                        destination: const RegisterScreen(),
+                      _buildFadeIn(
+                        delay: 600,
+                        child: _buildRoleButton(
+                          label: "Registrarme",
+                          subLabel: "Quiero unirme a Vamos",
+                          icon: Icons.add_business_rounded,
+                          isPrimary: false,
+                          // CAMBIO AQUÍ: Enviamos a la SplashScreen
+                          destination: const SplashScreen(
+                            logoPath: 'assets/images/logo.png',
+                            nextRoute: '/register',
+                            isDark: true, // Estilo Driver
+                          ),
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-
-          // Overlay de expansión fluido (SIN DEPRECATED)
-          if (_isNavigating)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _expansionAnimation,
-                builder: (context, child) {
-                  return Container(
-                    color: const Color(
-                      0xFF0D121F,
-                    ).withValues(alpha: _expansionAnimation.value),
-                    child: Center(
-                      child: Transform.scale(
-                        scale: 1.0 + (_expansionAnimation.value * 12),
-                        child: Opacity(
-                          opacity: (1.0 - _expansionAnimation.value).clamp(
-                            0.0,
-                            1.0,
-                          ),
-                          child: Image.asset(
-                            'assets/images/logo.png',
-                            width: 150,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
         ],
       ),
     );

@@ -31,11 +31,15 @@ class _DocumentsUploadScreenState extends State<DocumentsUploadScreen> {
   };
 
   // --- SELECCIÓN DE ARCHIVOS (SOLO PDF) ---
+  // --- SELECCIÓN DE ARCHIVOS (SOLO PDF) ---
   Future<void> _pickFile(String key) async {
+    if (_isSubmitting) return;
+
     try {
+      // Uso de FilePicker.platform.pickFiles
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf'], // Restricción estricta a PDF
+        allowedExtensions: ['pdf'],
       );
 
       if (result != null && result.files.isNotEmpty) {
@@ -44,8 +48,8 @@ class _DocumentsUploadScreenState extends State<DocumentsUploadScreen> {
         });
       }
     } catch (e) {
-      if (!mounted) return;
-      _showErrorSnackBar('Error seleccionando archivo: $e');
+      debugPrint("Error FilePicker: $e");
+      _showErrorSnackBar('Error seleccionando archivo.');
     }
   }
 

@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/models/trip_model.dart';
-import '../data/repositories/history_repository_impl.dart'; // Import corregido
+import '../data/repositories/history_repository_impl.dart';
 
 class TripHistoryScreen extends StatefulWidget {
   const TripHistoryScreen({super.key});
@@ -13,10 +13,12 @@ class TripHistoryScreen extends StatefulWidget {
 }
 
 class _TripHistoryScreenState extends State<TripHistoryScreen> {
-  // Usamos el nombre de la clase de tu archivo impl
   final HistoryRepositoryImpl _repository = HistoryRepositoryImpl();
   bool _isLoading = true;
-  List<Trip> _trips = []; // Cambiado a Trip
+  List<Trip> _trips = [];
+
+  final Color darkBg = const Color(0xFF0B0F19);
+  final Color cardColor = const Color(0xFF161B2E);
 
   @override
   void initState() {
@@ -36,35 +38,69 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: const BackButton(color: Colors.black),
-        title: Text(
-          "Historial de Viajes",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadHistory,
-              child: _trips.isEmpty
-                  ? _buildEmptyState()
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(24),
-                      itemCount: _trips.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(height: 16),
-                      itemBuilder: (context, index) =>
-                          _buildTripCard(_trips[index]),
+      backgroundColor: darkBg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // --- CABECERA ESTILO BILLETERA ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                      padding: const EdgeInsets.all(12),
+                    ),
+                  ),
+                  const SizedBox(width: 15),
+                  Text(
+                    "HISTORIAL DE VIAJES",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // --- CUERPO ---
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primaryGreen,
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadHistory,
+                      color: AppColors.primaryGreen,
+                      child: _trips.isEmpty
+                          ? _buildEmptyState()
+                          : ListView.separated(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 10,
+                              ),
+                              itemCount: _trips.length,
+                              separatorBuilder: (context, index) =>
+                                  const SizedBox(height: 16),
+                              itemBuilder: (context, index) =>
+                                  _buildTripCard(_trips[index]),
+                            ),
                     ),
             ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -78,166 +114,75 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
-        border: Border.all(color: Colors.grey.shade100),
+        color: cardColor.withValues(alpha: 0.8),
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: Colors.white10),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. ENCABEZADO: Fecha y Precio (Badge)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    DateFormat('dd MMM, yyyy').format(trip.date).toUpperCase(),
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  Text(
-                    DateFormat('hh:mm a').format(trip.date),
-                    style: GoogleFonts.poppins(
-                      fontSize: 11,
-                      color: Colors.grey.shade500,
-                    ),
-                  ),
-                ],
+              Text(
+                DateFormat(
+                  'dd MMM, yyyy • hh:mm a',
+                ).format(trip.date).toUpperCase(),
+                style: GoogleFonts.montserrat(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white54,
+                  letterSpacing: 1,
+                ),
               ),
-              // PRECIO ESTILO PILL (Como el del Menú)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  currencyFormat.format(trip.price),
-                  style: GoogleFonts.poppins(
-                    color: AppColors.primaryGreen,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
+              Text(
+                currencyFormat.format(trip.price),
+                style: GoogleFonts.montserrat(
+                  color: AppColors.primaryGreen,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
                 ),
               ),
             ],
           ),
-
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 15),
-            child: Divider(height: 1, thickness: 1, color: Color(0xFFF5F5F5)),
+            child: Divider(color: Colors.white10),
           ),
-
-          // 2. CUERPO: Direcciones con línea conectora sutil
-          Row(
-            children: [
-              // Iconos y Línea conectora
-              Column(
-                children: [
-                  const Icon(
-                    Icons.radio_button_checked,
-                    size: 18,
-                    color: AppColors.primaryGreen,
-                  ),
-                  Container(
-                    width: 1.5,
-                    height: 25,
-                    color: Colors.grey.shade200,
-                  ),
-                  const Icon(
-                    Icons.location_on,
-                    size: 18,
-                    color: Colors.redAccent,
-                  ),
-                ],
-              ),
-              const SizedBox(width: 15),
-              // Textos de Direcciones
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      trip.originAddress,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.black87,
-                        fontWeight: FontWeight.w400,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      trip.destinationAddress,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.black87,
-                        fontWeight: FontWeight.w400,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          _buildAddressRow(
+            Icons.radio_button_checked,
+            AppColors.primaryGreen,
+            trip.originAddress,
           ),
-
-          const SizedBox(height: 15),
-
-          // 3. PIE DE TARJETA: Estado "Finalizado"
-          Row(
-            children: [
-              Icon(
-                Icons.check_circle_outline_rounded,
-                size: 14,
-                color: Colors.grey.shade400,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                "Viaje finalizado",
-                style: GoogleFonts.poppins(
-                  fontSize: 11,
-                  color: Colors.grey.shade400,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+          const SizedBox(height: 12),
+          _buildAddressRow(
+            Icons.location_on_rounded,
+            Colors.redAccent,
+            trip.destinationAddress,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.history_rounded, size: 80, color: Colors.grey.shade200),
-          const SizedBox(height: 16),
-          Text(
-            "No has realizado viajes aún",
-            style: GoogleFonts.poppins(color: Colors.grey),
-          ),
-        ],
+  Widget _buildAddressRow(IconData icon, Color color, String text) => Row(
+    children: [
+      Icon(icon, size: 16, color: color),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Text(
+          text,
+          style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
-    );
-  }
+    ],
+  );
+
+  Widget _buildEmptyState() => Center(
+    child: Text(
+      "SIN VIAJES REGISTRADOS",
+      style: GoogleFonts.montserrat(color: Colors.white30, letterSpacing: 1),
+    ),
+  );
 }

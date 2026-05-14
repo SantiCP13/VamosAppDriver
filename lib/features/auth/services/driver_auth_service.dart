@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // <--- Faltaba este
+//import 'package:shared_preferences/shared_preferences.dart'; // <--- Faltaba este
 
 // IMPORTANTE: Asegúrate de que estas rutas sean las correctas en tu carpeta lib
 import '../../../core/network/api_client.dart';
@@ -19,93 +19,129 @@ class DriverAuthService {
   User? _currentUser;
   User? get currentUser => _currentUser;
 
-  // --- LOGIN ---
-  // --- LOGIN ---
-  Future<User> login(String email, String password) async {
-    await _apiClient.simulateDelay();
+  // Ubicación: lib/features/auth/services/driver_auth_service.dart
 
-    if (_apiClient.isMockOnly) {
-      _currentUser = _mockLogin(email, password);
-      return _currentUser!;
-    }
-
+  Future<User> login(
+    String email,
+    String password,
+    String deviceId,
+    String deviceName,
+  ) async {
     try {
       final response = await _apiClient.dio.post(
         '/login',
         data: {
           'email': email,
           'password': password,
-          'device_name': 'driver_app_flutter',
+          'device_name': deviceName, // Nombre real del cel (ej: Samsung S21)
+          'device_id': deviceId,
+          'app_type': 'DRIVER', // <--- ENVÍA ESTO AL BACKEND
         },
-        options: Options(
-          sendTimeout: const Duration(seconds: 60),
-          receiveTimeout: const Duration(seconds: 60),
-        ),
       );
 
-      final user = User.fromMap(response.data['data']['user']);
-      await _saveSession(user, response.data['data']['token']);
+      final userData = response.data['data']['user'];
+      final String token = response.data['data']['token'];
+
+      // 1. VALIDACIÓN DE ROL (DEBE SER 3)
+      // En tu backend Laravel el id_role suele venir como 'role_id' o en el objeto 'role'
+      // Buscamos en 'id_role' (como está en tu DB) o en 'role_id' por si Laravel lo renombra
+      final int roleId =
+          int.tryParse(
+            (userData['id_role'] ?? userData['role_id'])?.toString() ?? '0',
+          ) ??
+          0;
+      if (roleId != 3) {
+        throw Exception('Esta cuenta no está registrada como Conductor.');
+      }
+
+      // 2. VALIDACIÓN DE CUENTA ACTIVA
+      final bool isActive =
+          userData['active'] == 1 || userData['active'] == true;
+      if (!isActive && userData['status'] == 'VERIFIED') {
+        throw Exception('Tu cuenta ha sido desactivada. Contacta a soporte.');
+      }
+
+      final user = User.fromMap(userData);
+
+      // 3. GUARDADO SEGURO
+      await _saveSession(user, token);
+
       return user;
     } on DioException catch (e) {
-      if (e.response != null) {
-        final responseData = e.response!.data;
+      if (e.response != null && e.response?.data != null) {
+        final data = e.response!.data;
 
-        // Si el backend envió un mensaje directo (como hicimos en el paso 1)
-        if (responseData != null && responseData['message'] != null) {
-          throw Exception(responseData['message']);
+        // --- SEGURIDAD PROACTIVA ---
+        // Si el servidor rechaza las credenciales (422) o la cuenta (403/401)
+        // significa que lo que tenemos guardado en el celular YA NO SIRVE.
+        if (e.response!.statusCode == 422 ||
+            e.response!.statusCode == 403 ||
+            e.response!.statusCode == 401) {
+          await sl<StorageService>()
+              .deleteAll(); // Borramos huella y clave local de inmediato
+          debugPrint("Credenciales locales invalidadas por el servidor.");
         }
 
-        // Fallback para errores de validación de Laravel (Validator)
-        if (e.response!.statusCode == 422) {
-          final errors = responseData['errors'];
-          if (errors != null && errors is Map) {
-            final errorMessages = errors.values.expand((x) => x).join('\n');
-            throw Exception(errorMessages);
-          }
-        }
-
-        if (e.response!.statusCode == 500) {
-          throw Exception('Error en el servidor. Intente más tarde.');
-        }
+        String serverMessage = data is Map && data.containsKey('message')
+            ? data['message']
+            : 'Error de acceso.';
+        throw Exception(serverMessage);
       }
-      throw Exception('No se pudo conectar con el servidor.');
+      debugPrint("❌ ERROR DE CONEXIÓN: ${e.type}");
+      throw Exception('Sin conexión con VAMOS. Verifica tu internet.');
     }
   }
 
   // --- VALIDAR SESIÓN AL INICIO ---
   Future<UserVerificationStatus?> verifySessionAndGetStatus() async {
-    if (_apiClient.isMockOnly) {
-      return _currentUser?.verificationStatus ?? UserVerificationStatus.CREATED;
-    }
-
     try {
-      // CAMBIO: Leer desde StorageService/SharedPreferences
-      final token = await sl<StorageService>().getToken();
+      final storage = sl<StorageService>();
+      final token = await storage.getToken();
 
-      if (token == null) return null;
+      // SI NO HAY TOKEN, NO INTENTES IR AL SERVIDOR
+      if (token == null || token.isEmpty) {
+        return null;
+      }
 
-      // Hacemos la petición a /me para validar si el token sigue vivo y el usuario activo
-      final response = await _apiClient.dio.get(
-        '/me',
-        options: Options(
-          sendTimeout: const Duration(seconds: 60),
-          receiveTimeout: const Duration(seconds: 60),
-        ),
-      );
+      final response = await _apiClient.dio.get('/me');
 
       if (response.data['data'] != null) {
         _currentUser = User.fromMap(response.data['data']);
         return _currentUser!.verificationStatus;
       }
       return null;
-    } on DioException catch (e) {
-      // Si el token expiró (401) o el usuario fue desactivado (403), borramos el token local
-      if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
-        await logout();
-      }
-      return null;
     } catch (e) {
+      // Si el servidor da error (como el 401), devolvemos null
+      // El ApiClient ya se encargará de limpiar el token
       return null;
+    }
+  }
+
+  // --- NUEVO: VERIFICAR SI EL EMAIL EXISTE Y ES CONDUCTOR ---
+  // --- ACTUALIZADO: Recibe email y deviceId ---
+  Future<Map<String, dynamic>> checkAccount(
+    String email,
+    String deviceId,
+  ) async {
+    try {
+      final response = await _apiClient.dio.post(
+        '/check-account',
+        data: {
+          'email': email,
+          'device_id': deviceId, // <--- Enviamos el ID al backend
+        },
+      );
+
+      return response.data['data'];
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.data != null) {
+        final data = e.response!.data;
+        String msg = data is Map
+            ? (data['message'] ?? 'Error de validación')
+            : 'Error';
+        throw Exception(msg);
+      }
+      throw Exception('Verifica tu conexión a internet.');
     }
   }
 
@@ -125,11 +161,6 @@ class DriverAuthService {
     required File licenciaFile, // <--- NUEVO
   }) async {
     await _apiClient.simulateDelay();
-
-    if (_apiClient.isMockOnly) {
-      _currentUser = _mockRegister(name, email);
-      return _currentUser!;
-    }
 
     try {
       String selfieName = selfieFile.path.split('/').last;
@@ -352,66 +383,21 @@ class DriverAuthService {
   }
 
   Future<void> logout() async {
-    // En lugar de llamar a SharedPreferences aquí,
-    // usamos la función que ya creamos en nuestro servicio
-    await sl<StorageService>().clearCurrentTrip();
+    try {
+      // 1. Limpiamos la caja fuerte (Token, Pass y Biometría)
+      await sl<StorageService>().deleteAll();
 
-    // Y para borrar el token, usamos SharedPreferences directamente o
-    // podrías añadir un método 'deleteToken' en StorageService.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
+      // 2. Limpiamos datos temporales de SharedPreferences
+      await sl<StorageService>().clearCurrentTrip();
 
-    _currentUser = null;
+      // 3. Limpiamos el usuario en memoria
+      _currentUser = null;
+
+      debugPrint("Sesión destruida completamente");
+    } catch (e) {
+      debugPrint("Error al cerrar sesión: $e");
+    }
   }
 
   // --- MOCKS ---
-
-  User _mockLogin(String email, String password) {
-    if (email.contains('ok')) {
-      return User(
-        id: 'driver-ok',
-        email: email,
-        name: 'Conductor Verificado',
-        phone: '3001',
-        role: UserRole.DRIVER,
-        verificationStatus: UserVerificationStatus.VERIFIED,
-        beneficiaries: [],
-        appMode: AppMode.PERSONAL,
-      );
-    }
-    if (email.contains('wait')) {
-      return User(
-        id: 'driver-wait',
-        email: email,
-        name: 'Conductor En Espera',
-        phone: '3002',
-        role: UserRole.DRIVER,
-        verificationStatus: UserVerificationStatus.UNDER_REVIEW,
-        beneficiaries: [],
-        appMode: AppMode.PERSONAL,
-      );
-    }
-    return User(
-      id: 'driver-new',
-      email: email,
-      name: 'Conductor Nuevo',
-      phone: '3003',
-      role: UserRole.DRIVER,
-      verificationStatus: UserVerificationStatus.CREATED,
-      beneficiaries: [],
-      appMode: AppMode.PERSONAL,
-    );
-  }
-
-  User _mockRegister(String name, String email) {
-    return User(
-      id: 'new-driver-${DateTime.now().millisecondsSinceEpoch}',
-      email: email,
-      name: name,
-      phone: '3000',
-      role: UserRole.DRIVER,
-      verificationStatus: UserVerificationStatus.CREATED,
-      beneficiaries: [],
-    );
-  }
 }

@@ -1,16 +1,18 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../../core/enums/payment_enums.dart';
 import '../../wallet/services/payment_socket_service.dart';
 import '../../../core/di/injection_container.dart';
 import '../repositories/trip_repository.dart';
-import '../../../core/models/trip_model.dart'; // <--- 1. IMPORTACIÓN FALTANTE
-import 'package:google_fonts/google_fonts.dart';
+import '../../../core/models/trip_model.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PaymentWaitingSheet extends StatefulWidget {
   final String tripId;
   final double amount;
   final PaymentMethod paymentMethod;
-  final Function(Trip) onPaymentConfirmed; // Callback que ahora exige un Trip
+  final Function(Trip) onPaymentConfirmed;
 
   const PaymentWaitingSheet({
     super.key,
@@ -26,33 +28,28 @@ class PaymentWaitingSheet extends StatefulWidget {
 
 class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
   final PaymentSocketService _socketService = PaymentSocketService();
+  bool _isConfirming = false;
 
   @override
   void initState() {
     super.initState();
-
     if (!widget.paymentMethod.isManual) {
-      // 2. CORRECCIÓN POSITIONAL ARGUMENT EN SOCKET
       _socketService.paymentStream.listen((status) async {
         if (status == PaymentStatus.APPROVED) {
-          // Si el pago es por pasarela, pedimos al repo el viaje actualizado
-          // para tener los datos financieros reales (ganancia/comisión).
           try {
             final finalTrip = await sl<TripRepository>().updateTripStatus(
               widget.tripId,
               "COMPLETED",
             );
-
             if (mounted) {
               Navigator.pop(context);
-              widget.onPaymentConfirmed(finalTrip); // Pasamos el Trip obtenido
+              widget.onPaymentConfirmed(finalTrip);
             }
           } catch (e) {
-            debugPrint("Error obteniendo viaje final tras socket: $e");
+            debugPrint("Error socket payment: $e");
           }
         }
       });
-
       _socketService.connectToTripPayment(
         widget.tripId,
         methodName: widget.paymentMethod.displayName,
@@ -66,120 +63,114 @@ class _PaymentWaitingSheetState extends State<PaymentWaitingSheet> {
     super.dispose();
   }
 
-  IconData _getPaymentIcon(PaymentMethod method) {
-    switch (method) {
-      case PaymentMethod.CASH:
-        return Icons.payments_outlined;
-      case PaymentMethod.NEQUI:
-      case PaymentMethod.DAVIPLATA:
-        return Icons.phone_android_outlined;
-      case PaymentMethod.WALLET:
-        return Icons.account_balance_wallet_outlined;
-      case PaymentMethod.CREDIT_CARD:
-      case PaymentMethod.WOMPI:
-      case PaymentMethod.DIGITAL:
-        return Icons.credit_card_outlined;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final bool isManual = widget.paymentMethod.isManual;
-    final String methodName = widget.paymentMethod.displayName;
-
-    return Container(
-      padding: const EdgeInsets.all(30),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            _getPaymentIcon(widget.paymentMethod),
-            size: 60,
-            color: Colors.green,
+    return PopScope(
+      canPop: false, // Bloquea gestos de retroceso
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          padding: const EdgeInsets.all(30),
+          decoration: const BoxDecoration(
+            color: Color(0xFF161B2E), // Azul oscuro premium
+            borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
           ),
-          const SizedBox(height: 20),
-          Text(
-            "Cobro con $methodName",
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            "\$${widget.amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
-            style: GoogleFonts.poppins(
-              fontSize: 42,
-              fontWeight: FontWeight.w900,
-              color: Colors.green[700],
-            ),
-          ),
-          const SizedBox(height: 30),
-
-          if (isManual)
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                onPressed: () async {
-                  try {
-                    // 3. CAPTURA DEL TRIP TRAS PAGO MANUAL
-                    final freshTrip = await sl<TripRepository>()
-                        .confirmCashPayment(
-                          widget.tripId,
-                          widget.paymentMethod,
-                        );
-
-                    if (!mounted) return;
-                    // ignore: use_build_context_synchronously
-                    Navigator.pop(context);
-                    widget.onPaymentConfirmed(freshTrip);
-                  } catch (e) {
-                    debugPrint("Error reportando pago manual: $e");
-                    if (!mounted) return;
-                    // ignore: use_build_context_synchronously
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          "Error al confirmar: Verifica tu internet",
-                        ),
-                      ),
-                    );
-                  }
-                },
-                child: Text(
-                  "Confirmar Recaudo ($methodName)",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white10,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            )
-          else
-            const Column(
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 15),
-                Text(
-                  "Esperando confirmación de pago...",
-                  style: TextStyle(fontSize: 16, color: Colors.grey),
+              const SizedBox(height: 30),
+              Icon(
+                widget.paymentMethod.isManual
+                    ? Icons.payments_rounded
+                    : Icons.sync_rounded,
+                size: 50,
+                color: AppColors.primaryGreen,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                "Cobro con ${widget.paymentMethod.displayName}",
+                style: GoogleFonts.poppins(fontSize: 16, color: Colors.white70),
+              ),
+              Text(
+                "\$${widget.amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
+                style: GoogleFonts.montserrat(
+                  fontSize: 48,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
                 ),
-              ],
-            ),
-        ],
+              ),
+              const SizedBox(height: 30),
+
+              if (widget.paymentMethod.isManual)
+                SizedBox(
+                  width: double.infinity,
+                  height: 60,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryGreen,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                    ),
+                    onPressed: _isConfirming ? null : _handleManualPayment,
+                    child: _isConfirming
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : Text(
+                            "CONFIRMAR RECAUDO",
+                            style: GoogleFonts.montserrat(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                  ),
+                )
+              else
+                Column(
+                  children: [
+                    const CircularProgressIndicator(
+                      color: AppColors.primaryGreen,
+                    ),
+                    const SizedBox(height: 15),
+                    Text(
+                      "Esperando confirmación bancaria...",
+                      style: GoogleFonts.poppins(color: Colors.white30),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  Future<void> _handleManualPayment() async {
+    setState(() => _isConfirming = true);
+    try {
+      final freshTrip = await sl<TripRepository>().confirmCashPayment(
+        widget.tripId,
+        widget.paymentMethod,
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onPaymentConfirmed(freshTrip);
+    } catch (e) {
+      setState(() => _isConfirming = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Error al confirmar recaudo"),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 }

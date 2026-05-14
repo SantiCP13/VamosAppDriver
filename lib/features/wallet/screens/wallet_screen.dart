@@ -1,108 +1,139 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../../core/theme/app_colors.dart'; // Importa para usar AppColors
 import '../providers/wallet_provider.dart';
-import '../widgets/balance_card.dart';
-import '../widgets/transaction_list_item.dart';
+import '../widgets/transaction_detail_item.dart';
 
-class WalletScreen extends StatefulWidget {
+class WalletScreen extends StatelessWidget {
   const WalletScreen({super.key});
 
   @override
-  State<WalletScreen> createState() => _WalletScreenState();
-}
-
-class _WalletScreenState extends State<WalletScreen> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        context.read<WalletProvider>().loadWalletData();
-      }
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final wallet = context.watch<WalletProvider>();
+    final WalletProvider wallet = context.watch<WalletProvider>();
+    final Color darkBg = const Color(0xFF0B0F19);
 
     return Scaffold(
-      backgroundColor: Colors.white, // Fondo blanco igual al menú/perfil
-      appBar: AppBar(
-        title: Text(
-          "Mi Billetera",
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.w600,
-            color: Colors.black,
-            fontSize: 18,
-          ),
-        ),
-        centerTitle: true,
-        elevation: 0,
-        backgroundColor: Colors.white,
-        leading: const BackButton(color: Colors.black),
-      ),
-      body: wallet.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: () => context.read<WalletProvider>().loadWalletData(),
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 10,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Tarjeta de Saldo
-                    BalanceCard(
-                      balance: wallet.balance,
-                      todayEarnings: wallet.todayEarnings,
+      backgroundColor: darkBg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // --- BOTÓN DE ATRÁS PERSONALIZADO (Estilo Profile) ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: Colors.white,
+                      size: 20,
                     ),
-                    const SizedBox(height: 35),
-
-                    // Título Historial (Mismo estilo que "Información Personal" del perfil)
-                    Text(
-                      "HISTORIAL DE MOVIMIENTOS",
-                      style: GoogleFonts.poppins(
-                        color: Colors.grey.shade500,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 12,
-                        letterSpacing: 1.1,
-                      ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                      padding: const EdgeInsets.all(12),
                     ),
-                    const SizedBox(height: 15),
+                  ),
+                  const SizedBox(width: 15),
+                  Text(
+                    "BILLETERA",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-                    if (wallet.transactions.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 40),
-                          child: Text(
-                            "No hay movimientos registrados",
-                            style: GoogleFonts.poppins(color: Colors.grey),
-                          ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () => wallet.loadWalletData(),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 10,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildBalanceCard(wallet),
+                      const SizedBox(height: 40),
+                      Text(
+                        "HISTORIAL DE MOVIMIENTOS",
+                        style: GoogleFonts.montserrat(
+                          color: AppColors.primaryGreen,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.5,
                         ),
-                      )
-                    else
-                      ListView.separated(
-                        physics: const NeverScrollableScrollPhysics(),
-                        shrinkWrap: true,
-                        itemCount: wallet.transactions.length,
-                        separatorBuilder: (context, index) =>
-                            const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          return TransactionListItem(
-                            transaction: wallet.transactions[index],
-                          );
-                        },
                       ),
-                    const SizedBox(height: 40),
-                  ],
+                      const SizedBox(height: 20),
+                      ...wallet.transactions.map(
+                        (tx) => TransactionDetailItem(transaction: tx),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
+          ],
+        ),
+      ),
     );
   }
+
+  Widget _buildBalanceCard(WalletProvider wallet) => Container(
+    padding: const EdgeInsets.all(25),
+    decoration: BoxDecoration(
+      gradient: const LinearGradient(
+        colors: [Color(0xFF1E2A44), Color(0xFF0B0F19)],
+      ),
+      borderRadius: BorderRadius.circular(30),
+      border: Border.all(color: Colors.white10),
+    ),
+    child: Column(
+      children: [
+        Text(
+          "Saldo Disponible",
+          style: GoogleFonts.poppins(color: Colors.white54),
+        ),
+        Text(
+          "\$${wallet.balance.toStringAsFixed(0)}",
+          style: GoogleFonts.montserrat(
+            fontSize: 40,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 20),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _stat("Hoy", "\$${wallet.todayEarnings.toStringAsFixed(0)}"),
+            _stat("Viajes", "${wallet.transactions.length}"),
+          ],
+        ),
+      ],
+    ),
+  );
+
+  Widget _stat(String label, String value) => Column(
+    children: [
+      Text(
+        value,
+        style: GoogleFonts.montserrat(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      Text(
+        label,
+        style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12),
+      ),
+    ],
+  );
 }

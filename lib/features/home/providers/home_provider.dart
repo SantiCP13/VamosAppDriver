@@ -50,6 +50,13 @@ class HomeProvider extends ChangeNotifier {
   // Viaje
   Trip? _incomingTrip;
   Trip? _activeTrip;
+  set activeTrip(Trip? trip) {
+    _activeTrip = trip;
+    notifyListeners();
+  }
+
+  // 3. Mantén el getter igual
+  Trip? get activeTrip => _activeTrip;
   List<LatLng> _routePoints = [];
 
   // Vehículos y Documentos (FUEC)
@@ -67,11 +74,62 @@ class HomeProvider extends ChangeNotifier {
   LatLng? get currentPosition => _currentPosition;
   double get currentHeading => _currentHeading;
   Trip? get incomingTrip => _incomingTrip;
-  Trip? get activeTrip => _activeTrip;
   List<LatLng> get routePoints => _routePoints;
   List<Vehicle> get myVehicles => _myVehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
   Timer? _heartbeatTimer;
+  double _balance = 0.0;
+  Timer? _validationTimer;
+
+  void _showError(String message) {
+    debugPrint("🚩 ERROR: $message");
+    // Si quieres que aparezca un SnackBar, necesitarías pasar el context
+    // o usar un GlobalKey<ScaffoldMessengerState>
+  }
+
+  double get balance => _balance; // Necesario para el bloqueo
+  void updateBalance(double newBalance) {
+    _balance = newBalance;
+    notifyListeners();
+  }
+
+  // 2. Método para limpiar el timer cuando ya no haga falta
+  void _stopValidationTimer() {
+    _validationTimer?.cancel();
+    _validationTimer = null;
+  }
+
+  // 3. Método de validación que llamaremos al recibir una oferta
+  void _startValidationTimer(String assignmentId) {
+    _stopValidationTimer();
+
+    _validationTimer = Timer.periodic(const Duration(seconds: 10), (
+      timer,
+    ) async {
+      // Si no hay oferta, matamos el timer
+      if (_incomingTrip == null) {
+        _stopValidationTimer();
+        return;
+      }
+
+      // Consultamos al servidor si esa asignación sigue pendiente
+      try {
+        final response = await _tripRepository.checkAssignmentStatus(
+          assignmentId,
+        );
+        if (response == 'CANCELLED') {
+          debugPrint(
+            "🧹 [VALIDACIÓN] El servidor confirma que el viaje ya no existe.",
+          );
+          _incomingTrip = null;
+          _stopValidationTimer();
+          notifyListeners(); // Esto cerrará el modal automáticamente
+        }
+      } catch (e) {
+        debugPrint("Error validando oferta: $e");
+      }
+    });
+  }
 
   // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
   String get distanceToTarget {
@@ -98,29 +156,44 @@ class HomeProvider extends ChangeNotifier {
   // A. INICIALIZACIÓN Y GPS
   // =======================================================
 
+  // En tu método initLocation dentro de HomeProvider.dart
   Future<void> initLocation() async {
     _isLoading = true;
     notifyListeners();
     await loadVehicles();
 
-    final user = sl<AuthProvider>().user;
-    if (user != null) {
-      // Carga inicial de datos
-      sl<WalletProvider>().loadWalletData();
-      // Encendemos el monitor de la billetera (independiente de si está Online)
-      _startListeningWalletUpdates(user.id);
+    // AQUÍ ESTABA EL ERROR:
+    // Debes obtener la instancia de AuthProvider primero
+    final authProvider = sl<AuthProvider>();
+    final wallet = sl<WalletProvider>();
+
+    // Ahora sí, usa authProvider.user
+    if (authProvider.user != null) {
+      await wallet.loadWalletData();
+      _balance = wallet.balance;
+
+      wallet.addListener(() {
+        if (_balance != wallet.balance) {
+          _balance = wallet.balance;
+          notifyListeners();
+        }
+      });
+      _startListeningWalletUpdates(authProvider.user!.id);
     }
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
-      // 🔥 VALIDACIÓN EXTRA: Si el viaje guardado no tiene dirección o ID real, bórralo.
-      if (savedTrip.id == "0" ||
-          savedTrip.originAddress.contains("Origen...")) {
-        await _storageService.clearCurrentTrip();
-      } else {
-        _activeTrip = savedTrip;
+      // 1. ANTES DE PONERLO EN _activeTrip, preguntamos al servidor si ese viaje sigue vigente
+      final tripReal = await _tripRepository.getActiveTrip();
+
+      if (tripReal != null && tripReal.id == savedTrip.id) {
+        _activeTrip = tripReal; // Es real, lo cargamos
         _isOnline = true;
         _startListeningTrips();
         await _calculateRouteForCurrentStatus();
+      } else {
+        // Es un fantasma, bórralo
+        await _storageService.clearCurrentTrip();
+        _activeTrip = null;
       }
     }
 
@@ -200,18 +273,18 @@ class HomeProvider extends ChangeNotifier {
 
     try {
       _isLoading = true;
-      _myVehicles =
-          []; // 🔥 LIMPIEZA: Forzamos que la lista se vacíe un instante
       notifyListeners();
       final String userId = sl<AuthProvider>().user?.id ?? "0";
       _myVehicles = await _driverRepository.getAssignedVehicles(userId);
 
-      // Si el vehículo seleccionado ya no está en la lista (lo desactivaste en admin)
-      if (_selectedVehicle != null &&
-          !_myVehicles.any((v) => v.id == _selectedVehicle!.id)) {
-        _selectedVehicle = _myVehicles.isNotEmpty ? _myVehicles.first : null;
-        if (_isOnline && _selectedVehicle == null) {
-          toggleOnlineStatus(); // Lo desconectamos por seguridad si ya no tiene auto
+      if (_myVehicles.isNotEmpty) {
+        // Si no hay vehículo seleccionado, auto-selecciona el primero
+        if (_selectedVehicle == null) {
+          _selectedVehicle = _myVehicles.first;
+        } else {
+          // Opcional: Verifica si el seleccionado sigue existiendo
+          bool existe = _myVehicles.any((v) => v.id == _selectedVehicle!.id);
+          if (!existe) _selectedVehicle = _myVehicles.first;
         }
       }
 
@@ -219,6 +292,29 @@ class HomeProvider extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Dentro de tu HomeProvider.dart
+  Future<void> initActiveTrip() async {
+    try {
+      // CAMBIO: En lugar de _apiService, usa el repositorio existente
+      // Asumiendo que tu TripRepository tiene un método para buscar el viaje activo
+      final tripData = await _tripRepository.getActiveTrip();
+
+      if (tripData != null) {
+        _activeTrip =
+            tripData; // Como el repositorio ya devuelve un objeto Trip, no necesitas .fromMap
+        notifyListeners();
+      } else {
+        _activeTrip = null;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint("Error refrescando viaje activo: $e");
+      // Si falla (por 404 o red), limpiamos
+      _activeTrip = null;
       notifyListeners();
     }
   }
@@ -298,6 +394,7 @@ class HomeProvider extends ChangeNotifier {
 
         if (_isOnline) {
           _startListeningTrips();
+          debugPrint("🟢 LISTENER DE VIAJES INICIADO");
         } else {
           _stopListeningTrips();
           _activeTrip = null;
@@ -330,36 +427,35 @@ class HomeProvider extends ChangeNotifier {
     });
   }
 
+  // En tu HomeProvider.dart, localiza _startListeningTrips y añade el punto "."
   void _startListeningTrips() {
     _tripSubscription?.cancel();
 
-    // Escuchamos el stream que viene del repositorio de sockets
     _tripSubscription = _tripRepository.listenForTrips().listen((trip) {
-      // 1. 🔥 LÓGICA DE CANCELACIÓN EN TIEMPO REAL
-      // Si el ID del viaje cancelado coincide con el que el conductor tiene en pantalla
-      if (trip.status == TripStatus.CANCELLED) {
-        bool esMiOferta = _incomingTrip?.id == trip.id;
-        bool esMiViajeActivo = _activeTrip?.id == trip.id;
+      debugPrint("📡 [SOCKET] Evento: ${trip.status} para viaje ${trip.id}");
 
-        if (esMiOferta || esMiViajeActivo) {
-          debugPrint(
-            "🛑 El viaje ${trip.id} ha sido cancelado. Limpiando UI...",
-          );
-
-          _incomingTrip = null;
-          _activeTrip = null;
-          _routePoints = [];
-          _storageService.clearCurrentTrip();
-
-          notifyListeners(); // Esto hace que el aviso desaparezca de la pantalla
-        }
+      if (trip.status == TripStatus.CANCELLED ||
+          trip.status == TripStatus.COMPLETED) {
+        debugPrint("🛑 [SOCKET] Limpieza forzada de oferta/viaje activo.");
+        _incomingTrip = null; // ESTO ES LO QUE TE FALTABA
+        _activeTrip = null;
+        _finishTrip();
         return;
       }
 
-      // 2. Lógica normal para mostrar ofertas nuevas
-      if (_activeTrip != null || _incomingTrip != null) return;
-      _incomingTrip = trip;
-      notifyListeners();
+      if (trip.status == TripStatus.ACCEPTED) {
+        _activeTrip = trip;
+        _incomingTrip = null; // Quita la oferta
+        notifyListeners();
+      } else {
+        if (trip.status == TripStatus.PENDING) {
+          _incomingTrip = trip;
+          _startValidationTimer(
+            trip.assignmentId ?? trip.id,
+          ); // <--- INICIAR VALIDACIÓN
+          notifyListeners();
+        }
+      }
     });
   }
 
@@ -369,7 +465,18 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get puedeAceptarViajes {
+    // Accedemos al valor actual de la billetera
+    // Nota: Si WalletProvider es accesible, obtenemos su valor
+    final wallet = sl<WalletProvider>();
+    return wallet.balance > -20000;
+  }
+
   Future<void> acceptIncomingTrip() async {
+    if (!puedeAceptarViajes) {
+      _showError("Tu saldo es muy bajo. Recarga para continuar.");
+      return;
+    }
     if (_incomingTrip == null || _currentPosition == null) return;
 
     _isLoading = true;
@@ -404,15 +511,47 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  void rejectIncomingTrip() {
-    if (_incomingTrip != null) {
-      // 🔥 CAMBIO CLAVE: Usamos assignmentId igual que en aceptar,
-      // para que Laravel busque la asignación correcta y no dé 404.
+  Future<void> rejectIncomingTrip() async {
+    // 1. Verificación de seguridad
+    if (_incomingTrip == null) return;
+
+    _isLoading = true;
+    notifyListeners();
+
+    try {
       final idParaResponder = _incomingTrip!.assignmentId ?? _incomingTrip!.id;
 
-      _tripRepository.rejectTrip(idParaResponder);
-
+      // 2. Llamada al repo (que ya no lanza throw)
+      await _tripRepository.rejectTrip(idParaResponder);
+    } catch (e) {
+      debugPrint("Error no controlado en UI: $e");
+    } finally {
+      // 3. LIMPIEZA FORZADA
+      // Independientemente de si el servidor respondió bien o mal,
+      // para el conductor este viaje YA NO EXISTE.
       _incomingTrip = null;
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// --- NUEVO: Lógica unificada de cancelación (Conductor) ---
+  Future<void> cancelTripAsDriver(String tripId) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      // Usamos updateTripStatus que ya tienes configurado para 'CANCELLED'
+      await _tripRepository.updateTripStatus(tripId, 'CANCELLED');
+
+      // Limpieza post-cancelación
+      _finishTrip(); // Este método ya lo tienes y limpia variables y notifica
+    } catch (e) {
+      debugPrint("Error al cancelar: $e");
+      // Si falla en servidor, limpiamos localmente por seguridad
+      _finishTrip();
+    } finally {
+      _isLoading = false;
       notifyListeners();
     }
   }

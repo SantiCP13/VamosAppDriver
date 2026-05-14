@@ -4,6 +4,8 @@ import 'package:latlong2/latlong.dart';
 import '../enums/payment_enums.dart';
 
 enum TripStatus {
+  PENDING, // <--- AÑADE ESTO
+
   REQUESTED,
   ACCEPTED,
   ARRIVED,
@@ -229,7 +231,9 @@ class Trip {
   }
   static TripStatus _parseStatus(dynamic status) {
     if (status == null) {
-      return TripStatus.REQUESTED;
+      // CAMBIO: Si no hay estado, no es REQUESTED, es un estado nulo
+      // Puedes crear un estado 'NONE' en tu Enum o manejarlo como nulo
+      return TripStatus.CANCELLED; // O el estado que prefieras para "vacío"
     }
 
     final s = status.toString().toUpperCase();

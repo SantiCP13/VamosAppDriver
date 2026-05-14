@@ -2,7 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart'; // Añadir esta
 import 'dart:ui';
+import 'package:flutter/services.dart'; // <--- ESTA ES LA QUE FALTA
 
 import '../../../core/theme/app_colors.dart';
 import '../services/driver_auth_service.dart';
@@ -69,26 +71,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
       RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email);
 
   // Cambia el método para aceptar un entero o un enum para identificar el archivo
-  Future<void> _pickImage(int type) async {
-    if (_isPickerActive) return; // Si ya hay uno abriéndose, ignorar
+  Future<void> _pickDocument(int type) async {
+    if (_isPickerActive) return;
 
     setState(() => _isPickerActive = true);
 
     try {
-      final XFile? image = await _picker.pickImage(
-        source: type == 0 ? ImageSource.camera : ImageSource.gallery,
-        imageQuality: 60, // Comprimimos un poco para el server
-      );
-
-      if (image != null) {
-        setState(() {
-          if (type == 0) _selfieFile = File(image.path);
-          if (type == 1) _cedulaFile = File(image.path);
-          if (type == 2) _licenciaFile = File(image.path);
-        });
+      // 0: Selfie (Sigue siendo solo cámara/foto)
+      if (type == 0) {
+        final XFile? photo = await _picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 70,
+        );
+        if (photo != null) {
+          setState(() => _selfieFile = File(photo.path));
+        }
       }
+      // 1 y 2: Cédula y Licencia (Acepta PDF e Imágenes)
+      else {
+        // CORRECCIÓN: FilePicker.platform.pickFiles es la forma correcta
+        FilePickerResult? result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
+          allowMultiple: false,
+        );
+
+        if (result != null && result.files.single.path != null) {
+          setState(() {
+            if (type == 1) _cedulaFile = File(result.files.single.path!);
+            if (type == 2) _licenciaFile = File(result.files.single.path!);
+          });
+        }
+      }
+    } on PlatformException catch (e) {
+      debugPrint("Error de plataforma: $e");
+      _showSnack("El selector ya está abierto o hubo un error.", isError: true);
     } finally {
-      setState(() => _isPickerActive = false); // Liberar siempre al terminar
+      // Damos un pequeño respiro al sistema para evitar el crash de 'already_active'
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) setState(() => _isPickerActive = false);
     }
   }
 
@@ -147,7 +168,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } else if (_selfieFile == null ||
         _cedulaFile == null ||
         _licenciaFile == null) {
-      errorDetail = "Debes subir la selfie, la cédula y la licencia.";
+      _showSnack(
+        "Debes subir la selfie, la cédula y la licencia.",
+        isError: true,
+      );
+      return;
     } else if (!_aceptaTerminos) {
       errorDetail = "Debes autorizar el tratamiento de datos personales.";
     }
@@ -233,25 +258,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0D121F),
       extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: Container(
-          margin: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.1),
-            shape: BoxShape.circle,
-          ),
-          child: IconButton(
-            icon: const Icon(
-              Icons.arrow_back_ios_new_rounded,
-              size: 18,
-              color: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(context),
-          ),
-        ),
-      ),
+
       body: Stack(
         children: [
           Container(
@@ -266,15 +273,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
           SafeArea(
             child: SingleChildScrollView(
               controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 28.0),
+              padding: const EdgeInsets.only(
+                left: 28.0,
+                right: 28.0,
+                top: 20.0,
+              ), // Agregamos un top padding aquí también
               child: Form(
                 key: _formKey,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 120),
                     Text(
-                      "Únete al Equipo",
+                      "Únete al equipo",
                       style: GoogleFonts.montserrat(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
@@ -365,14 +376,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       "Selfie de Verificación",
                       Icons.face_unlock_rounded,
                       _selfieFile != null,
-                      () => _pickImage(0),
+                      () => _pickDocument(0),
                     ),
                     const SizedBox(height: 12),
                     _buildFileCard(
                       "Foto de Cédula",
                       Icons.badge_outlined,
                       _cedulaFile != null,
-                      () => _pickImage(1),
+                      () => _pickDocument(1),
                     ),
                     const SizedBox(height: 12),
 
@@ -380,7 +391,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       "Licencia de Conducción", // <--- NUEVO CARD
                       Icons.drive_eta_rounded,
                       _licenciaFile != null,
-                      () => _pickImage(2),
+                      () => _pickDocument(2),
                     ),
 
                     const SizedBox(height: 20),
@@ -389,6 +400,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     _buildSubmitButton(),
                     const SizedBox(height: 50),
                   ],
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 50,
+            left: 20,
+            child: SafeArea(
+              child: IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white,
+                  size: 22,
+                ),
+                style: IconButton.styleFrom(
+                  // ignore: deprecated_member_use
+                  backgroundColor: Colors.white.withOpacity(0.1),
+                  padding: const EdgeInsets.all(12),
                 ),
               ),
             ),
@@ -674,7 +704,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _buildSubmitButton() {
     return Container(
       width: double.infinity,
-      height: 65,
+      height: 62,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
@@ -697,7 +727,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         child: _isLoading
             ? const CircularProgressIndicator(color: Colors.white)
             : Text(
-                "REGISTRARME AHORA",
+                "REGÍSTRATE",
                 style: GoogleFonts.montserrat(
                   fontSize: 16,
                   fontWeight: FontWeight.w900,

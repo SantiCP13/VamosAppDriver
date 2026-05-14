@@ -26,6 +26,7 @@ import '../../features/maps/services/route_service.dart';
 import '../../features/wallet/providers/wallet_provider.dart';
 import '../../features/history/providers/history_provider.dart';
 import '../../features/auth/providers/auth_provider.dart';
+import '../services/biometric_service.dart';
 
 final sl = GetIt.instance;
 
@@ -39,7 +40,7 @@ Future<void> init() async {
 
   // TripService depende de RouteService (sl() lo inyecta automático)
   sl.registerLazySingleton<TripService>(() => TripService(sl()));
-
+  sl.registerLazySingleton<BiometricService>(() => BiometricService());
   // ---------------------------------------------------
   // 2. REPOSITORIOS (Data Layer)
   // ---------------------------------------------------
@@ -47,12 +48,7 @@ Future<void> init() async {
   final isMock = dotenv.env['ENV_TYPE'] == 'MOCK';
 
   if (isMock) {
-    // --- MOCKS (Datos falsos para pruebas) ---
-    sl.registerLazySingleton<DriverRepository>(() => MockDriverRepository());
-    sl.registerLazySingleton<TripRepository>(() => MockTripRepository());
-
     // Nuevos Módulos
-    sl.registerLazySingleton<WalletRepository>(() => MockWalletRepository());
     sl.registerLazySingleton<HistoryRepository>(() => HistoryRepositoryImpl());
   } else {
     // --- API (Conexión real al Backend) ---

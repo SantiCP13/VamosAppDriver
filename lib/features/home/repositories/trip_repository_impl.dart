@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-// IMPORTANTE: Estos 3 imports de Pusher son vitales para que no haya errores de tipo
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
 import 'package:dio/dio.dart';
 
@@ -13,7 +12,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/services/storage_service.dart';
 import '../../auth/providers/auth_provider.dart';
 import 'trip_repository.dart';
-import '../../../core/enums/payment_enums.dart'; // <--- 1. AGREGA ESTA LÍNEA
+import '../../../core/enums/payment_enums.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class ApiTripRepository implements TripRepository {
@@ -36,11 +35,7 @@ class ApiTripRepository implements TripRepository {
   Future<Trip> acceptTrip(String asignacionId, double lat, double lng) async {
     final response = await _api.dio.post(
       '/asignaciones/$asignacionId/responder',
-      data: {
-        'respuesta': 'aceptar',
-        'lat': lat, // ✅ Enviamos ubicación actual del conductor
-        'lng': lng,
-      },
+      data: {'respuesta': 'aceptar', 'lat': lat, 'lng': lng},
     );
 
     if (response.data['viaje'] != null) {
@@ -50,11 +45,41 @@ class ApiTripRepository implements TripRepository {
   }
 
   @override
+  Future<String> checkAssignmentStatus(String assignmentId) async {
+    try {
+      final response = await _api.dio.get(
+        '/viajes/verificar-asignacion/$assignmentId',
+      );
+      return response.data['status']
+          .toString(); // Retornará 'ACTIVE' o 'CANCELLED'
+    } catch (e) {
+      return 'CANCELLED'; // Si falla, asumimos que ya no sirve
+    }
+  }
+
+  @override
+  Future<Trip?> getActiveTrip() async {
+    try {
+      final response = await _api.dio.get('/conductor/viaje-activo');
+      if (response.data['data'] != null) {
+        return Trip.fromMap(response.data['data']);
+      }
+    } catch (e) {
+      debugPrint("No hay viaje activo o error: $e");
+    }
+    return null;
+  }
+
+  @override
   Stream<Trip> listenForTrips() {
     final user = sl<AuthProvider>().user;
     if (user == null) return const Stream.empty();
+
+    final String idParaSocket = user.id.toString();
+    debugPrint("🚨 ID REAL PARA SOCKET: $idParaSocket");
+
     final controller = StreamController<Trip>();
-    _initSocket(controller, user.id, sl<StorageService>());
+    _initSocket(controller, idParaSocket, sl<StorageService>());
     return controller.stream;
   }
 
@@ -72,87 +97,172 @@ class ApiTripRepository implements TripRepository {
         await _client!.disconnect();
         _eventSubscription?.cancel();
       }
+
+      final String host = dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co';
+      final String key = dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe';
+
+      final int port = 443;
+      final String scheme = 'wss';
+
+      debugPrint("🚀 Conectando a $scheme://$host:$port con key: $key");
+
       _client = PusherChannelsClient.websocket(
         options: PusherChannelsOptions.fromHost(
-          scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss', // 'wss' para SSL
-          host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
-          port: int.parse(
-            dotenv.env['REVERB_PORT'] ?? '443',
-          ), // Puerto 443 para HTTPS
-          key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
+          scheme: scheme,
+          host: host,
+          port: port,
+          key: key,
         ),
         connectionErrorHandler: (exception, trace, client) =>
-            debugPrint("❌ Error Socket en Producción: $exception"),
+            debugPrint("❌ Error Socket: $exception"),
       );
 
       _client!.eventStream.listen((event) {
-        debugPrint("DEBUG PUSHER: Evento -> ${event.name}");
-
         if (event.name == 'pusher:connection_established') {
-          debugPrint("✅ Conectado. Suscribiendo...");
+          debugPrint("✅ Conectado al Socket. Configurando canal...");
 
-          // ✅ Lo ponemos AQUÍ (donde es obligatorio según el error de la línea 78)
           final myChannel = _client!.privateChannel(
-            'private-conductor.$userId', // Nombre completo del canal
+            'private-conductor.$userId',
             authorizationDelegate: MyPusherAuth(token: token, dio: Dio()),
           );
 
-          myChannel.subscribe();
-
-          // Busca esta parte dentro de _initSocket en trip_repository_impl.dart
-          _eventSubscription = myChannel.bind('nueva.asignacion').listen((e) {
+          // 🔥 LÓGICA BLINDADA DE DECODIFICACIÓN
+          void procesarNuevaAsignacion(dynamic e) {
+            debugPrint("🚨 [PASO 1] EVENTO RECIBIDO EN FLUTTER. Procesando...");
             if (e.data != null) {
               try {
-                final Map<String, dynamic> data = json.decode(e.data!);
+                // 1. Parseo seguro de String a Mapa
+                Map<String, dynamic> rawData;
+                if (e.data is String) {
+                  rawData = json.decode(e.data!);
+                } else {
+                  rawData = Map<String, dynamic>.from(e.data);
+                }
 
-                // Obtenemos el ID de la asignación
-                final String assignmentId = data['asignacion']['id'].toString();
+                // 2. Extracción de Asignación y Viaje
+                final Map<String, dynamic> data =
+                    rawData.containsKey('asignacion')
+                    ? Map<String, dynamic>.from(rawData['asignacion'])
+                    : rawData;
 
-                // Obtenemos los datos del viaje
-                final Map<String, dynamic> tripData =
-                    data['asignacion']['viaje'];
-
-                // 🔥 CAMBIO CLAVE: NO sobreescribas el ID del viaje.
-                // Guarda el ID de asignación en otra llave para usarla al aceptar.
+                final String assignmentId = data['id'].toString();
+                final Map<String, dynamic> tripData = Map<String, dynamic>.from(
+                  data['viaje'],
+                );
                 tripData['assignment_id'] = assignmentId;
 
-                controller.add(Trip.fromMap(tripData));
-              } catch (ex) {
-                debugPrint("❌ Error: $ex");
+                debugPrint(
+                  "✅ [PASO 2] Viaje Extraído. Ajustando tipos de datos...",
+                );
+
+                // 3. ESCUDO PROTECTOR (Evita crash de Int vs Double)
+                if (tripData['precio_estimado'] is int) {
+                  tripData['precio_estimado'] =
+                      (tripData['precio_estimado'] as int).toDouble();
+                }
+                if (tripData['lat_origen'] is int) {
+                  tripData['lat_origen'] = (tripData['lat_origen'] as int)
+                      .toDouble();
+                }
+                if (tripData['lng_origen'] is int) {
+                  tripData['lng_origen'] = (tripData['lng_origen'] as int)
+                      .toDouble();
+                }
+                if (tripData['lat_destino'] is int) {
+                  tripData['lat_destino'] = (tripData['lat_destino'] as int)
+                      .toDouble();
+                }
+                if (tripData['lng_destino'] is int) {
+                  tripData['lng_destino'] = (tripData['lng_destino'] as int)
+                      .toDouble();
+                }
+
+                // 4. Inyección de valores requeridos que el Backend no mandó
+                if (!tripData.containsKey('estado') &&
+                    !tripData.containsKey('status')) {
+                  tripData['estado'] = 'PENDING';
+                }
+
+                debugPrint(
+                  "✅ [PASO 3] Tipos ajustados. Convirtiendo a TripModel...",
+                );
+
+                // 5. Conversión Final
+                final Trip newTrip = Trip.fromMap(tripData);
+
+                debugPrint(
+                  "✅ [PASO 4] Modelo Creado Correctamente (Viaje ID: ${newTrip.id}). Notificando al Provider...",
+                );
+
+                controller.add(newTrip);
+
+                debugPrint(
+                  "🚀 [PASO 5] ¡ORDEN ENVIADA CON ÉXITO! El Modal debería aparecer ahora.",
+                );
+              } catch (ex, stacktrace) {
+                // Ahora si explota, nos dirá la línea exacta del error
+                debugPrint("❌ CRÍTICO: Error decodificando el modelo: $ex");
+                debugPrint("❌ Stacktrace: $stacktrace");
               }
             }
-          });
-          // 🔥 NUEVO: Escuchar si el viaje es cancelado mientras está en oferta o en curso
-          // 🔥 MEJORADO: Ahora sí lee el ID real que manda el servidor
-          myChannel.bind('ViajeCancelado').listen((e) {
+          }
+
+          // En ApiTripRepository.dart, dentro de procesarCancelacion:
+          void procesarCancelacion(dynamic e) {
             if (e.data != null) {
               try {
-                final Map<String, dynamic> data = json.decode(e.data!);
-                debugPrint("🚨 Cancelación para viaje ID: ${data['id']}");
+                final Map<String, dynamic> data = e.data is String
+                    ? json.decode(e.data!)
+                    : Map<String, dynamic>.from(e.data);
 
-                // Enviamos al controlador el ID real con estado CANCELLED
+                final String idCancelado = (data['viaje_id'] ?? data['id'])
+                    .toString();
+
+                debugPrint(
+                  "🚨[SOCKET] FORZANDO ELIMINACIÓN DE VIAJE: $idCancelado",
+                );
+
+                // Enviamos un objeto que fuerce al HomeProvider a ejecutar _finishTrip()
                 controller.add(
                   Trip.fromMap({
-                    'id': data['id'].toString(), // ID real del viaje cancelado
-                    'estado': 'CANCELLED',
-                    'mensaje': data['mensaje'] ?? 'El usuario canceló el viaje',
+                    'id': idCancelado,
+                    'estado':
+                        'CANCELLED', // O 'status' dependiendo de tu modelo
+                    'status': 'CANCELLED',
+                    'mensaje': 'Viaje cancelado por el usuario',
                   }),
                 );
               } catch (ex) {
-                debugPrint("❌ Error decodificando cancelación: $ex");
+                debugPrint("❌ Error procesando cancelación: $ex");
               }
             }
-          });
+          }
+
+          myChannel.bind('nueva.asignacion').listen(procesarNuevaAsignacion);
+          myChannel.bind('.nueva.asignacion').listen(procesarNuevaAsignacion);
+          myChannel
+              .bind('App\\Events\\NuevaAsignacion')
+              .listen(procesarNuevaAsignacion);
+
+          myChannel.bind('ViajeCancelado').listen(procesarCancelacion);
+          myChannel.bind('.ViajeCancelado').listen(procesarCancelacion);
+          myChannel
+              .bind('App\\Events\\ViajeCancelado')
+              .listen(procesarCancelacion);
+
+          myChannel.subscribe();
+          debugPrint(
+            "✅ Suscripción enviada al canal: private-conductor.$userId",
+          );
         }
       });
 
       _client!.connect();
     } catch (e) {
-      debugPrint("🚨 Error: $e");
+      debugPrint("🚨 Error en _initSocket: $e");
     }
   }
 
-  // Corregimos los avisos de las llaves {} en este método también
   @override
   Future<Trip> updateTripStatus(
     String tripId,
@@ -161,8 +271,6 @@ class ApiTripRepository implements TripRepository {
     double? lng,
   }) async {
     String? subPath;
-
-    // 🔥 NUEVA LÓGICA: Si es cancelar, usamos la ruta dedicada que creamos en Laravel
     if (status == 'CANCELLED') {
       final response = await _api.dio.post('/viajes/$tripId/cancelar');
       if (response.data['status'] == 'success') {
@@ -173,35 +281,41 @@ class ApiTripRepository implements TripRepository {
 
     if (status == 'ARRIVED') {
       subPath = '/llegada';
-    } else if (status == 'STARTED') {
+    } else if (status == 'STARTED')
+      // ignore: curly_braces_in_flow_control_structures
       subPath = '/iniciar';
-    } else if (status == 'DROPPED_OFF') {
+    else if (status == 'DROPPED_OFF')
+      // ignore: curly_braces_in_flow_control_structures
       subPath = '/llegada-destino';
-    }
 
-    if (subPath == null) {
-      // ✅ CORRECCIÓN: Eliminamos _activeTrip y devolvemos un objeto básico
-      // Esto solo ocurre si se llama al método con un estado no soportado por esta función.
-      return Trip.fromMap({'id': tripId, 'estado': status});
-    }
+    if (subPath == null) return Trip.fromMap({'id': tripId, 'estado': status});
 
     final response = await _api.dio.post(
       '/viajes/$tripId$subPath',
       data: {if (lat != null) 'lat': lat, if (lng != null) 'lng': lng},
     );
 
-    if (response.data['viaje'] == null) {
-      throw Exception("El servidor no devolvió los datos del viaje.");
-    }
-
+    if (response.data['viaje'] == null) throw Exception("Error del servidor.");
     return Trip.fromMap(response.data['viaje']);
   }
 
   @override
-  Future<void> rejectTrip(String tripId) async => await _api.dio.post(
-    '/asignaciones/$tripId/responder',
-    data: {'respuesta': 'rechazar'},
-  );
+  Future<void> rejectTrip(String tripId) async {
+    try {
+      await _api.dio.post(
+        '/asignaciones/$tripId/responder',
+        data: {'respuesta': 'rechazar'},
+      );
+    } on DioException catch (e) {
+      // SOLO registramos el error, NO lanzamos un throw.
+      // Esto evita que el Provider se rompa y que el ApiClient reaccione mal.
+      debugPrint(
+        "🚨 [REPOSITORY] El rechazo retornó estado: ${e.response?.statusCode}",
+      );
+    } catch (e) {
+      debugPrint("🚨 [REPOSITORY] Error inesperado al rechazar: $e");
+    }
+  }
 
   @override
   Future<void> updateLocation(String tripId, double lat, double lng) async =>
@@ -212,14 +326,12 @@ class ApiTripRepository implements TripRepository {
 
   @override
   Future<Trip> confirmCashPayment(String tripId, PaymentMethod method) async {
-    // MAPEADOR: Traducimos el Enum de Flutter a lo que Laravel entiende
     String backendMethod = 'EFECTIVO';
     if (method == PaymentMethod.WOMPI || method == PaymentMethod.CREDIT_CARD) {
       backendMethod = 'TARJETA';
-    } else if (method == PaymentMethod.WALLET) {
+    } else if (method == PaymentMethod.WALLET)
+      // ignore: curly_braces_in_flow_control_structures
       backendMethod = 'CORPORATIVO';
-    }
-    // Nota: CASH, NEQUI y DAVIPLATA se reportan como 'EFECTIVO' porque el conductor recibió el valor físico.
 
     final response = await _api.dio.post(
       '/viajes/$tripId/finalizar',
@@ -229,7 +341,7 @@ class ApiTripRepository implements TripRepository {
     if (response.data['viaje'] != null) {
       return Trip.fromMap(response.data['viaje']);
     }
-    throw Exception("No se pudo confirmar el pago en el servidor");
+    throw Exception("No se pudo confirmar el pago.");
   }
 
   void dispose() {
@@ -240,7 +352,6 @@ class ApiTripRepository implements TripRepository {
   }
 }
 
-// ESTA CLASE DEBE ESTAR EXACTAMENTE ASÍ PARA EVITAR ERRORES DE FIRMA
 class MyPusherAuth
     implements
         EndpointAuthorizableChannelAuthorizationDelegate<
@@ -262,8 +373,11 @@ class MyPusherAuth
     String channelName,
   ) async {
     try {
+      final String apiUrl =
+          dotenv.env['API_URL'] ?? 'https://api.vamosapp.com.co/api';
+
       final response = await dio.post(
-        'https://api.vamosapp.com.co/api/broadcasting/auth',
+        '$apiUrl/broadcasting/auth', // Construcción dinámica
         data: {'socket_id': socketId, 'channel_name': channelName},
         options: Options(
           headers: {
@@ -272,7 +386,6 @@ class MyPusherAuth
           },
         ),
       );
-      // Retornamos el formato que la librería espera
       return PrivateChannelAuthorizationData(
         authKey: response.data['auth'] ?? '',
       );
@@ -281,34 +394,4 @@ class MyPusherAuth
       return const PrivateChannelAuthorizationData(authKey: '');
     }
   }
-}
-
-class MockTripRepository implements TripRepository {
-  @override
-  // ✅ ACTUALIZADO: Para que coincida con la interfaz
-  Future<Trip> acceptTrip(String asignacionId, double lat, double lng) async =>
-      throw UnimplementedError();
-
-  @override
-  Stream<Trip> listenForTrips() => const Stream.empty();
-  @override
-  Future<void> rejectTrip(String tripId) async {}
-  @override
-  Future<Trip> updateTripStatus(
-    String tripId,
-    String status, {
-    double? lat,
-    double? lng,
-  }) async => throw UnimplementedError();
-  @override
-  Future<void> updateLocation(String tripId, double lat, double lng) async {}
-  @override
-  Future<Trip> confirmCashPayment(String tripId, PaymentMethod method) async {
-    throw UnimplementedError();
-  }
-
-  @override
-  Stream<void> listenForFleetChanges() => const Stream.empty();
-  @override
-  Stream<double> listenForWalletUpdates(String userId) => const Stream.empty();
 }

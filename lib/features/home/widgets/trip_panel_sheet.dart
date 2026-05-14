@@ -13,14 +13,22 @@ class TripPanelSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = Provider.of<HomeProvider>(context);
     final trip = provider.activeTrip;
+
+    // Si no hay viaje, no dibujamos nada
     if (trip == null) return const SizedBox.shrink();
 
+    // Definimos las variables necesarias aquí para que estén disponibles en todo el build
     final bool isStarted = trip.status == TripStatus.STARTED;
     final primaryColor = isStarted
         ? const Color(0xFF2E7D32)
         : AppColors.primaryGreen;
 
     return Container(
+      width: double.infinity, // Asegura que el ancho sea el de la pantalla
+      constraints: BoxConstraints(
+        minHeight: 100, // Altura mínima para que Flutter no se queje
+        maxHeight: MediaQuery.of(context).size.height * 0.85, // Altura máxima
+      ),
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
@@ -33,53 +41,61 @@ class TripPanelSheet extends StatelessWidget {
         ],
       ),
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag Handle
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(10),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize
+              .min, // El contenido se adapta, pero con el Container padre tiene un límite
+          children: [
+            // Drag Handle
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 15),
+            const SizedBox(height: 15),
 
-          // CABECERA: ESTADO + ETA
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _statusBadge(trip.status, provider.distanceToTarget),
-              if (isStarted) _fuecButton(trip, context),
-            ],
-          ),
-          const SizedBox(height: 20),
+            // CABECERA: ESTADO + ETA
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _statusBadge(trip.status, provider.distanceToTarget),
+                if (isStarted) _fuecButton(trip, context),
+              ],
+            ),
+            const SizedBox(height: 20),
 
-          // CLIENTE + CONTACTO
-          _buildClientSection(trip, provider),
+            // CLIENTE + CONTACTO
+            _buildClientSection(trip, provider),
+            const SizedBox(height: 15),
 
-          const SizedBox(height: 15),
+            // MANIFIESTO DE PASAJEROS (FUEC)
+            _buildPassengerManifest(trip.passengers),
+            const SizedBox(height: 20),
 
-          // MANIFIESTO DE PASAJEROS (FUEC)
-          _buildPassengerManifest(trip.passengers),
+            // DIRECCIONES (Timeline)
+            _buildTimelineAddresses(trip),
+            const SizedBox(height: 25),
 
-          const SizedBox(height: 20),
-
-          // DIRECCIONES (Timeline)
-          _buildTimelineAddresses(trip),
-
-          const SizedBox(height: 25),
-
-          // ACCIONES
-          _buildActionButtons(context, provider, trip, primaryColor),
-        ],
+            // ACCIONES
+            _buildActionButtons(
+              context,
+              provider,
+              trip,
+              primaryColor,
+              isStarted,
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  // --- MÉTODOS AUXILIARES ---
 
   Widget _statusBadge(TripStatus status, String distance) {
     return Container(
@@ -184,12 +200,11 @@ class TripPanelSheet extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            "MANIFIESTO LEGAL (ACOMPAÑANTES)",
+            "MANIFIESTO LEGAL",
             style: GoogleFonts.poppins(
               fontSize: 9,
               fontWeight: FontWeight.bold,
               color: Colors.grey[600],
-              letterSpacing: 0.5,
             ),
           ),
           const SizedBox(height: 10),
@@ -211,7 +226,6 @@ class TripPanelSheet extends StatelessWidget {
                         border: Border.all(color: Colors.grey[300]!),
                       ),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             p.name,
@@ -222,10 +236,7 @@ class TripPanelSheet extends StatelessWidget {
                           ),
                           Text(
                             "${p.documentType}: ${p.nationalId}",
-                            style: GoogleFonts.poppins(
-                              fontSize: 9,
-                              color: Colors.grey[600],
-                            ),
+                            style: GoogleFonts.poppins(fontSize: 9),
                           ),
                         ],
                       ),
@@ -271,7 +282,7 @@ class TripPanelSheet extends StatelessWidget {
         Expanded(
           child: Text(
             address,
-            style: GoogleFonts.poppins(fontSize: 13, color: Colors.black87),
+            style: GoogleFonts.poppins(fontSize: 13),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -285,12 +296,15 @@ class TripPanelSheet extends StatelessWidget {
     HomeProvider provider,
     Trip trip,
     Color primaryColor,
+    bool isStarted,
   ) {
     return Column(
       children: [
+        // Usamos un Row con MainAxisSize.min para que no intente ocupar infinito
         Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (trip.status != TripStatus.STARTED)
+            if (!isStarted)
               _actionBtn(
                 Icons.close,
                 "CANCELAR",
@@ -298,8 +312,9 @@ class TripPanelSheet extends StatelessWidget {
                 Colors.red,
                 () => _confirmCancel(context, provider),
               ),
-            if (trip.status != TripStatus.STARTED) const SizedBox(width: 12),
-            Expanded(
+            if (!isStarted) const SizedBox(width: 12),
+            // En lugar de Expanded, usamos Flexible para que se adapte al espacio disponible
+            Flexible(
               child: _actionBtn(
                 null,
                 _getActionText(trip.status).toUpperCase(),
@@ -310,28 +325,13 @@ class TripPanelSheet extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 15),
-        InkWell(
-          onTap: provider.openExternalNavigation,
-          child: Text(
-            "Abrir Waze o Google Maps",
-            style: GoogleFonts.poppins(
-              fontSize: 13,
-              color: Colors.blue[800],
-              fontWeight: FontWeight.w600,
-              decoration: TextDecoration.underline,
-            ),
-          ),
-        ),
       ],
     );
   }
 
-  // --- HELPERS DE DISEÑO ---
   Widget _roundIconButton(IconData icon, Color color, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(15),
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -350,31 +350,42 @@ class TripPanelSheet extends StatelessWidget {
     Color txt,
     VoidCallback onTap,
   ) {
-    return SizedBox(
-      height: 56,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minWidth: 100,
+        maxWidth: 250,
+        minHeight: 50,
+      ),
       child: ElevatedButton(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
           backgroundColor: bg,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(15),
           ),
+          padding: const EdgeInsets.symmetric(horizontal: 10), // Padding menor
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (icon != null) Icon(icon, color: txt, size: 18),
-            if (icon != null) const SizedBox(width: 8),
-            Text(
-              text,
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.bold,
-                color: txt,
-                fontSize: 14,
+        child: FittedBox(
+          // <--- ESTO EVITA EL OVERFLOW
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) Icon(icon, color: txt, size: 18),
+              if (icon != null) const SizedBox(width: 6),
+              Text(
+                text,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  color: txt,
+                  fontSize: 13, // Reducimos levemente el tamaño
+                ),
+                textAlign: TextAlign.center,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -382,46 +393,28 @@ class TripPanelSheet extends StatelessWidget {
 
   void _openFuec(String? url, BuildContext context) async {
     if (url == null || url.isEmpty) return;
-    final Uri uri = Uri.parse(url);
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    if (!await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    )) {
       ScaffoldMessenger.of(
         // ignore: use_build_context_synchronously
         context,
-      ).showSnackBar(const SnackBar(content: Text('No se pudo abrir el PDF')));
+      ).showSnackBar(const SnackBar(content: Text('Error al abrir PDF')));
     }
   }
 
-  String _getStatusText(TripStatus status) {
-    switch (status) {
-      case TripStatus.ACCEPTED:
-        return "En camino";
-      case TripStatus.ARRIVED:
-        return "En el sitio";
-      case TripStatus.STARTED:
-        return "En viaje";
-      default:
-        return "";
-    }
-  }
-
-  String _getActionText(TripStatus status) {
-    switch (status) {
-      case TripStatus.ACCEPTED:
-        return "Llegué al sitio";
-      case TripStatus.ARRIVED:
-        return "Iniciar carrera";
-      case TripStatus.STARTED:
-        return "Finalizar viaje";
-      default:
-        return "Continuar";
-    }
-  }
+  String _getStatusText(TripStatus status) => status == TripStatus.ACCEPTED
+      ? "En camino"
+      : (status == TripStatus.ARRIVED ? "En el sitio" : "En viaje");
+  String _getActionText(TripStatus status) => status == TripStatus.ACCEPTED
+      ? "Llegué al sitio"
+      : (status == TripStatus.ARRIVED ? "Iniciar carrera" : "Finalizar viaje");
 
   void _confirmCancel(BuildContext context, HomeProvider provider) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         title: const Text("¿Cancelar viaje?"),
         actions: [
           TextButton(

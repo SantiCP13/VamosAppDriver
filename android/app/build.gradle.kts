@@ -22,7 +22,7 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID
         applicationId = "com.vamos.driver.vamos_driver"
-        minSdk = flutter.minSdkVersion // Cambia flutter.minSdkVersion por 21
+        minSdk = flutter.minSdkVersion  
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

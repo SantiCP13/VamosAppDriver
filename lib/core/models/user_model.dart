@@ -26,6 +26,7 @@ enum AppMode { PERSONAL, CORPORATE }
 /// MODELO DE BENEFICIARIO (PASAJERO ADICIONAL)
 class Beneficiary {
   final String id;
+
   final String name;
   final String documentNumber;
 
@@ -44,6 +45,7 @@ class Beneficiary {
   factory Beneficiary.fromJson(Map<String, dynamic> json) {
     return Beneficiary(
       id: json['id']?.toString() ?? '',
+
       name: json['name'] ?? '',
       documentNumber: json['document_number'] ?? json['documentNumber'] ?? '',
     );
@@ -53,7 +55,7 @@ class Beneficiary {
 /// MODELO DE USUARIO
 class User {
   final String id; // PK (UUID)
-
+  final String? driverId;
   // Variables mutables
   String? idPassenger;
   String? idResponsable; // FK manager_id
@@ -86,6 +88,7 @@ class User {
 
   User({
     required this.id,
+    this.driverId,
     this.idPassenger,
     this.idResponsable,
     required this.email,
@@ -112,6 +115,10 @@ class User {
   factory User.fromMap(Map<String, dynamic> map) {
     return User(
       id: map['id']?.toString() ?? '',
+      driverId: map['conductor'] != null
+          ? map['conductor']['id'].toString()
+          : null,
+
       idPassenger: map['passenger_id']?.toString() ?? map['id_pasajero'],
       idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
       email: map['email'] ?? '',
@@ -127,8 +134,8 @@ class User {
       companyUuid: map['company_id'],
 
       // --- CORRECCIÓN EN ROL ---
-      role: _parseRole(map['role'] ?? map['role_id']),
-
+      // Busca el factory User.fromMap y asegúrate de que la línea del rol sea así:
+      role: _parseRole(map['role'] ?? map['id_role'] ?? map['role_id']),
       verificationStatus: _parseStatus(map),
 
       appMode: (map['app_mode'] == 'CORPORATE')

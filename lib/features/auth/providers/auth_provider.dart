@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../core/models/user_model.dart';
 import '../services/driver_auth_service.dart';
+import '../../../core/di/injection_container.dart';
+import '../../../core/services/storage_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   final DriverAuthService _authService = DriverAuthService();
@@ -9,18 +11,26 @@ class AuthProvider extends ChangeNotifier {
   // Getter para obtener el usuario actual desde el servicio
   User? get user => _authService.currentUser;
 
-  /// NUEVO MÉTODO: Verifica si el token es válido al arrancar la app
-  /// Esto es lo que el main.dart necesita para no dar error.
   Future<bool> checkAuthStatus() async {
-    // Llamamos al método que ya creaste en el servicio
-    final status = await _authService.verifySessionAndGetStatus();
+    final storage = sl<StorageService>();
 
-    // Si el status no es nulo, significa que el token es válido y el usuario existe
-    if (status != null) {
-      notifyListeners();
-      return true;
+    // 1. ¿Existe un token guardado en la caja fuerte?
+    final token = await storage.getToken();
+    if (token == null || token.isEmpty) return false;
+
+    // 2. Verificación silenciosa:
+    // Intentamos validar el token con el servidor sin pedir huella ni PIN.
+    try {
+      final status = await _authService.verifySessionAndGetStatus();
+      if (status != null) {
+        notifyListeners();
+        return true; // El token es válido, entra directo al Home.
+      }
+    } catch (e) {
+      debugPrint("Sesión expirada o error de red: $e");
     }
 
+    // 3. Si el token no es válido o hubo error, enviamos al Welcome
     return false;
   }
 

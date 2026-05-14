@@ -16,4 +16,6 @@ abstract class TripRepository {
   Stream<double> listenForWalletUpdates(String userId);
   Future<Trip> confirmCashPayment(String tripId, PaymentMethod method);
   Stream<void> listenForFleetChanges();
+  Future<Trip?> getActiveTrip(); // <--- AGREGA ESTA
+  Future<String> checkAssignmentStatus(String assignmentId);
 }
