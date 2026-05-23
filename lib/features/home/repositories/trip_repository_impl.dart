@@ -206,6 +206,34 @@ class ApiTripRepository implements TripRepository {
               }
             }
           }
+          // En ApiTripRepository.dart, dentro de _initSocket:
+
+          void procesarNoDisponible(dynamic e) {
+            if (e.data != null) {
+              try {
+                final Map<String, dynamic> data = e.data is String
+                    ? json.decode(e.data!)
+                    : Map<String, dynamic>.from(e.data);
+
+                final String idViajeNoDisponible =
+                    (data['viaje_id'] ?? data['id']).toString();
+
+                debugPrint(
+                  "🚨 [SOCKET] VIAJE YA NO DISPONIBLE: $idViajeNoDisponible. Cerrando alerta...",
+                );
+
+                // Enviamos un objeto con estado 'NO_DISPONIBLE' para que el Provider cierre el modal
+                controller.add(
+                  Trip.fromMap({
+                    'id': idViajeNoDisponible,
+                    'estado': 'NO_DISPONIBLE',
+                  }),
+                );
+              } catch (ex) {
+                debugPrint("❌ Error procesando ViajeNoDisponible: $ex");
+              }
+            }
+          }
 
           // En ApiTripRepository.dart, dentro de procesarCancelacion:
           void procesarCancelacion(dynamic e) {
@@ -249,7 +277,12 @@ class ApiTripRepository implements TripRepository {
           myChannel
               .bind('App\\Events\\ViajeCancelado')
               .listen(procesarCancelacion);
-
+          // Busca donde tienes los otros bind (al final de la configuración del socket)
+          myChannel.bind('ViajeNoDisponible').listen(procesarNoDisponible);
+          myChannel.bind('.ViajeNoDisponible').listen(procesarNoDisponible);
+          myChannel
+              .bind('App\\Events\\ViajeNoDisponibleEvent')
+              .listen(procesarNoDisponible);
           myChannel.subscribe();
           debugPrint(
             "✅ Suscripción enviada al canal: private-conductor.$userId",

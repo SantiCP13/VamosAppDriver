@@ -32,8 +32,16 @@ class RouteService {
           );
 
       if (response.statusCode == 200) {
+        // 1. Primero decodificamos el JSON del body (porque usamos http)
         final data = json.decode(response.body);
 
+        // 2. Ahora sí puedes buscar la clave de depuración
+        if (data.containsKey('debug_debug')) {
+          // ignore: avoid_print
+          print(" 🛠️ DEBUG PRECIOS: ${data['debug_debug']}");
+        }
+
+        // 3. Validar rutas
         if (data['routes'] == null || (data['routes'] as List).isEmpty) {
           throw Exception('Ruta vacía devuelta por API');
         }
@@ -55,7 +63,7 @@ class RouteService {
           points: points,
           distanceMeters: (route['distance'] as num).toDouble(),
           durationSeconds: (route['duration'] as num).toDouble(),
-          isFallback: false, // Indicamos que es una ruta real
+          isFallback: false,
         );
       } else {
         throw Exception('Error API: ${response.statusCode}');

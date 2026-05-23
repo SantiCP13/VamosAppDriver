@@ -7,6 +7,20 @@ import '../../../core/services/storage_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   final DriverAuthService _authService = DriverAuthService();
+  AuthProvider() {
+    // Intentamos cargar el usuario al arrancar la app
+    _initializeUser();
+  }
+
+  // Nuevo método interno
+  Future<void> _initializeUser() async {
+    // Si ya existe en la memoria del servicio, no hacemos nada
+    if (_authService.currentUser != null) return;
+
+    // Esto asegura que el servicio tenga el usuario cargado lo antes posible
+    await _authService.verifySessionAndGetStatus();
+    notifyListeners();
+  }
 
   // Getter para obtener el usuario actual desde el servicio
   User? get user => _authService.currentUser;

@@ -4,7 +4,7 @@ import 'package:latlong2/latlong.dart';
 import '../enums/payment_enums.dart';
 
 enum TripStatus {
-  PENDING, // <--- AÑADE ESTO
+  PENDING,
 
   REQUESTED,
   ACCEPTED,
@@ -19,13 +19,13 @@ enum TripStatus {
 class Passenger {
   final String name;
   final String nationalId;
-  final String documentType; // <--- NUEVO: CC, CE, TI, etc.
+  final String documentType; // CC, CE, TI, etc.
   final String? phone;
 
   Passenger({
     required this.name,
     required this.nationalId,
-    this.documentType = 'CC', // Por defecto CC
+    this.documentType = 'CC',
     this.phone,
   });
 
@@ -38,7 +38,6 @@ class Passenger {
 
   factory Passenger.fromJson(Map<String, dynamic> json) {
     return Passenger(
-      // Sincronizamos llaves con el Backend de Laravel
       name: json['nombre_completo'] ?? json['name'] ?? 'Pasajero',
       nationalId:
           json['numero_documento'] ??
@@ -66,6 +65,10 @@ class Trip {
   final LatLng destinationLocation;
   final DateTime date;
   final double distanceKm;
+  final double duration;
+  final String?
+  passengerPhone; // <--- NUEVO CAMPO PARA GUARDAR EL TELÉFONO DE LA BD
+
   final TripStatus status;
   final PaymentMethod paymentMethod;
   final String? fuecUrl;
@@ -86,6 +89,9 @@ class Trip {
     required this.originLocation,
     required this.destinationLocation,
     required this.distanceKm,
+    required this.duration,
+    this.passengerPhone, // <--- INICIALIZACIÓN
+
     this.status = TripStatus.REQUESTED,
     this.paymentMethod = PaymentMethod.CASH,
     this.fuecUrl,
@@ -94,32 +100,6 @@ class Trip {
 
   String get passengerName =>
       passengers.isNotEmpty ? passengers.first.name : "Usuario";
-  /*
-  String? get fuecUrl {
-    if (legalSnapshot != null && legalSnapshot!.containsKey('fuec_url')) {
-      return legalSnapshot!['fuec_url'];
-    }
-    if (status == TripStatus.ACCEPTED ||
-        status == TripStatus.ARRIVED ||
-        status == TripStatus.STARTED) {
-      return "https://www.ministeriodetransporte.gov.co/documentos/fuec_ejemplo.pdf";
-    }
-    return null;
-  }
-  */
-  factory Trip.mock() {
-    return Trip(
-      id: "trip_mock",
-      date: DateTime.now(),
-      passengers: [Passenger(name: "Ana María", nationalId: "123")],
-      price: 12500.0,
-      originAddress: "Andino",
-      destinationAddress: "93",
-      originLocation: const LatLng(4.66, -74.05),
-      destinationLocation: const LatLng(4.67, -74.04),
-      distanceKm: 2.5,
-    );
-  }
 
   Trip copyWith({
     String? id,
@@ -135,8 +115,13 @@ class Trip {
     LatLng? originLocation,
     LatLng? destinationLocation,
     double? distanceKm,
+    double? duration,
+    String? passengerPhone, // <--- SOPORTE COPYWITH
+
     TripStatus? status,
     PaymentMethod? paymentMethod,
+    String? fuecUrl, // <--- AGREGADO AQUÍ
+
     Map<String, dynamic>? legalSnapshot,
   }) {
     return Trip(
@@ -153,13 +138,25 @@ class Trip {
       originLocation: originLocation ?? this.originLocation,
       destinationLocation: destinationLocation ?? this.destinationLocation,
       distanceKm: distanceKm ?? this.distanceKm,
+      duration: duration ?? this.duration,
+      passengerPhone: passengerPhone ?? this.passengerPhone, // <--- RETORNO
+
       status: status ?? this.status,
       paymentMethod: paymentMethod ?? this.paymentMethod,
+      fuecUrl: fuecUrl ?? this.fuecUrl, // <--- AGREGADO AQUÍ
+
       legalSnapshot: legalSnapshot ?? this.legalSnapshot,
     );
   }
 
   factory Trip.fromMap(Map<String, dynamic> map) {
+    // ignore: avoid_print
+    print("DEBUG_DATOS_JSON_RECIBIDOS: $map");
+
+    final v = map.containsKey('viaje')
+        ? map['viaje']
+        : (map.containsKey('asignacion') ? map['asignacion']['viaje'] : map);
+
     double checkDouble(dynamic value) {
       if (value == null) return 0.0;
       if (value is num) return value.toDouble();
@@ -167,61 +164,115 @@ class Trip {
       return 0.0;
     }
 
-    TripStatus calculatedStatus = _parseStatus(map['estado'] ?? map['status']);
-
-    // --- NUEVA LÓGICA FINANCIERA DINÁMICA ---
-    final desglose = map['desglose_precio'] ?? {};
+    final desglose = (v['desglose_precio'] ?? map['desglose_precio'] ?? {});
     final double totalPeajes = checkDouble(desglose['total_peajes']);
-    final latOri = checkDouble(map['lat_origen']);
+    final TripStatus calculatedStatus = _parseStatus(
+      map['estado'] ?? map['status'],
+    );
+
+    // --- EXTRACTOR DE TELÉFONO DE PASAJERO MULTICAPA A PRUEBA DE FALLOS ---
+    String? extractedPhone;
+    try {
+      if (map['telefono_pasajero'] != null) {
+        extractedPhone = map['telefono_pasajero'].toString();
+      } else if (v['telefono_pasajero'] != null) {
+        extractedPhone = v['telefono_pasajero'].toString();
+      } else if (map['usuario'] != null && map['usuario']['telefono'] != null) {
+        extractedPhone = map['usuario']['telefono'].toString();
+      } else if (v['usuario'] != null && v['usuario']['telefono'] != null) {
+        extractedPhone = v['usuario']['telefono'].toString();
+      } else if (map['usuario'] != null && map['usuario']['phone'] != null) {
+        extractedPhone = map['usuario']['phone'].toString();
+      } else if (map['pasajeros'] != null &&
+          map['pasajeros'] is List &&
+          (map['pasajeros'] as List).isNotEmpty) {
+        final firstPas = (map['pasajeros'] as List).first;
+        if (firstPas is Map) {
+          extractedPhone =
+              (firstPas['phone'] ??
+                      firstPas['telefono'] ??
+                      firstPas['celular'] ??
+                      '')
+                  .toString();
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print("Error parseando teléfono: $e");
+    }
 
     return Trip(
-      id: (latOri == 0.0)
-          ? "0"
-          : (map['id'] ?? map['viaje_id'] ?? '').toString(),
-      assignmentId: map['assignment_id']?.toString(),
+      id: (map['id'] ?? v['id'] ?? '').toString(),
+      assignmentId:
+          (map['assignment_id'] ??
+                  (isset(map['asignacion']) ? map['asignacion']['id'] : '') ??
+                  '')
+              .toString(),
       fuecUrl: map['fuec_url']?.toString(),
       contractId: map['id_contrato']?.toString(),
-      passengers: map['pasajeros'] != null
+
+      passengers: (map['pasajeros'] ?? v['pasajeros']) != null
           ? List<Passenger>.from(
-              map['pasajeros'].map((x) => Passenger.fromJson(x)),
+              (map['pasajeros'] ?? v['pasajeros']).map(
+                (x) => Passenger.fromJson(x),
+              ),
             )
           : [],
 
-      // 1. PRECIO TOTAL (Lo que paga el usuario)
-      price: checkDouble(
-        map['precio_estimado'] ??
-            map['total_a_cobrar_al_pasajero'] ??
-            map['monto_final'],
-      ),
-
-      // 2. GANANCIA NETA (Lo que le queda al conductor después de comisión)
+      price: checkDouble(map['precio_estimado'] ?? v['precio_estimado'] ?? 0),
       driverRevenue: checkDouble(
-        map['ganancia_conductor'] ?? map['tu_ganancia_neta'],
+        map['ganancia_neta'] ?? map['tu_ganancia_neta'] ?? 0,
+      ),
+      platformFee: checkDouble(map['comision_app'] ?? 0),
+
+      originAddress: map['origen'] ?? v['origen'] ?? 'Origen...',
+      destinationAddress: map['destino'] ?? v['destino'] ?? 'Destino...',
+
+      distanceKm: checkDouble(
+        map['asignacion']?['viaje']?['distancia_km'] ??
+            map['distancia_km'] ??
+            desglose['distancia_km'] ??
+            0.0,
+      ),
+      duration: checkDouble(
+        map['asignacion']?['viaje']?['duracion_minutos'] ??
+            map['duracion_minutos'] ??
+            desglose['duracion_minutos'] ??
+            0.0,
       ),
 
-      // 3. COMISIÓN (Lo que se queda la App)
-      platformFee: checkDouble(
-        map['comision_app'] ?? map['comision_app_descontada'],
-      ),
+      passengerPhone:
+          extractedPhone, // <--- ALMACENAMIENTO DE TELÉFONO DE LA BD
 
-      originAddress: map['origen'] ?? 'Origen...',
-      destinationAddress: map['destino'] ?? 'Destino...',
-      distanceKm: checkDouble(map['distancia_km']),
       status: calculatedStatus,
       paymentMethod: _parsePaymentMethod(map['metodo_pago']),
+
       originLocation: LatLng(
-        checkDouble(map['lat_origen']),
-        checkDouble(map['lng_origen']),
+        checkDouble(
+          map['lat_origen'] ??
+              (map.containsKey('viaje')
+                  ? map['viaje']['lat_origen']
+                  : (map.containsKey('asignacion')
+                        ? map['asignacion']['viaje']['lat_origen']
+                        : 0)),
+        ),
+        checkDouble(
+          map['lng_origen'] ??
+              (map.containsKey('viaje')
+                  ? map['viaje']['lng_origen']
+                  : (map.containsKey('asignacion')
+                        ? map['asignacion']['viaje']['lng_origen']
+                        : 0)),
+        ),
       ),
       destinationLocation: LatLng(
-        checkDouble(map['lat_destino']),
-        checkDouble(map['lng_destino']),
+        checkDouble(v['lat_destino'] ?? map['lat_destino'] ?? 0),
+        checkDouble(v['lng_destino'] ?? map['lng_destino'] ?? 0),
       ),
       date: DateTime.parse(
         map['solicitado_en'] ?? DateTime.now().toIso8601String(),
       ),
 
-      // Guardamos info extra para mostrarla en el historial
       legalSnapshot: {
         'total_peajes': totalPeajes,
         'porcentaje_comision': checkDouble(desglose['porcentaje_aplicado']),
@@ -229,11 +280,11 @@ class Trip {
       },
     );
   }
+
+  static bool isset(dynamic map) => map != null && map is Map;
   static TripStatus _parseStatus(dynamic status) {
     if (status == null) {
-      // CAMBIO: Si no hay estado, no es REQUESTED, es un estado nulo
-      // Puedes crear un estado 'NONE' en tu Enum o manejarlo como nulo
-      return TripStatus.CANCELLED; // O el estado que prefieras para "vacío"
+      return TripStatus.CANCELLED;
     }
 
     final s = status.toString().toUpperCase();

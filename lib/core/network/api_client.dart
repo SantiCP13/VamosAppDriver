@@ -65,32 +65,50 @@ class ApiClient {
           );
           return handler.next(response);
         },
+        // En lib/core/network/api_client.dart
         onError: (DioException e, handler) async {
-          developer.log('❌ ERROR: ${e.requestOptions.path}', name: 'API_DEBUG');
-
-          // OBTENEMOS EL PATH COMPLETO PARA ASEGURAR QUE NO HAYA CONFUSIONES
+          final statusCode = e.response?.statusCode;
           final path = e.requestOptions.path;
 
-          // Blindaje mejorado: usamos una lista para ser más ordenados
-          final protectedPaths = [
+          developer.log(
+            '❌ ERROR: $path | STATUS: $statusCode',
+            name: 'API_DEBUG',
+          );
+
+          // 1. RUTAS INTOCABLES: Bajo ninguna circunstancia cerramos sesión.
+          final whiteList = [
             '/responder',
-            '/cancelar',
+            '/asignaciones',
+            '/login',
+            '/register',
+            '/tracking',
             '/iniciar',
-            '/viajes/',
-            '/asignaciones/', // <--- AGREGADO: Es fundamental para el rechazo
+            '/finalizar',
+            '/viaje-activo', // <--- IMPORTANTE: Agregamos esto
+            '/viajes/activo', // <--- IMPORTANTE: Agregamos esto
           ];
 
-          // Si el path contiene alguno de los protegidos, NO hagas logout
-          if (protectedPaths.any((p) => path.contains(p))) {
+          if (whiteList.any((p) => path.contains(p))) {
             return handler.next(e);
           }
 
-          // Solo hacer logout si es un 401 real y NO es una ruta protegida
-          if (e.response?.statusCode == 401) {
-            await sl<StorageService>().deleteAll();
-            NavigationService.navigatorKey.currentState
-                ?.pushNamedAndRemoveUntil('/', (route) => false);
+          // 2. LOGOUT SOLO SI ES UNA PETICIÓN DE "ME" (Perfil) Y ES 401
+          // Si falla el perfil, es que el token realmente murió.
+          if (statusCode == 401 && path.contains('/me')) {
+            final storage = sl<StorageService>();
+            final token = await storage.getToken();
+
+            if (token != null) {
+              developer.log(
+                "⚠️ Token inválido en /me. Cerrando sesión...",
+                name: 'API_DEBUG',
+              );
+              await storage.deleteAll();
+              NavigationService.navigatorKey.currentState
+                  ?.pushNamedAndRemoveUntil('/', (route) => false);
+            }
           }
+
           return handler.next(e);
         },
       ),

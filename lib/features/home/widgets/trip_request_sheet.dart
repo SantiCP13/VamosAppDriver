@@ -19,174 +19,274 @@ class TripRequestSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<HomeProvider>().calculateIncomingTripRoute();
+    });
+
     if (trip.id == '0' || trip.status == TripStatus.CANCELLED) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => Navigator.pop(context),
       );
       return const SizedBox.shrink();
     }
-    final double totalPeajes = (trip.legalSnapshot?['total_peajes'] ?? 0)
-        .toDouble();
-    final bool tienePeajes = totalPeajes > 0;
+
+    final provider = context.watch<HomeProvider>();
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(25, 12, 25, 30),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
       decoration: const BoxDecoration(
-        color: Colors.white,
+        color: Color(0xFF161B2E),
         borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-        boxShadow: [
-          BoxShadow(color: Colors.black12, blurRadius: 25, spreadRadius: 10),
-        ],
+        border: Border(top: BorderSide(color: Colors.white10, width: 1)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle
           Container(
-            width: 45,
-            height: 5,
+            width: 40,
+            height: 4,
             margin: const EdgeInsets.only(bottom: 20),
             decoration: BoxDecoration(
-              color: Colors.grey[200],
+              color: Colors.white10,
               borderRadius: BorderRadius.circular(10),
             ),
           ),
 
+          // Header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        "OFERTA DISPONIBLE",
-                        style: GoogleFonts.poppins(
-                          color: AppColors.primaryGreen,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 10,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      trip.passengerName,
-                      style: GoogleFonts.poppins(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    "\$${trip.price.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
-                    style: GoogleFonts.poppins(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.primaryGreen,
+                    "NUEVA SOLICITUD",
+                    style: GoogleFonts.montserrat(
+                      fontSize: 10,
+                      color: Colors.white54,
+                      letterSpacing: 1.5,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  if (tienePeajes)
-                    Text(
-                      "Con peajes",
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        color: Colors.amber[900],
-                        fontWeight: FontWeight.w600,
-                      ),
+                  const SizedBox(height: 4),
+                  Text(
+                    trip.passengerName,
+                    style: GoogleFonts.poppins(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
                     ),
+                  ),
+                ],
+              ),
+              Column(
+                children: [
+                  Text(
+                    "TIEMPO HACIA LA RECOGIDA",
+                    style: GoogleFonts.montserrat(
+                      fontSize: 8,
+                      color: Colors.white30,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    provider.incomingTripEta,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 18,
+                      color: AppColors.primaryGreen,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
             ],
           ),
 
-          const SizedBox(height: 25),
+          const SizedBox(height: 15),
 
-          // --- LINEA DE TIEMPO DE DIRECCIONES ---
+          // Distancia
+          Row(
+            children: [
+              const Icon(Icons.near_me, color: Colors.white30, size: 16),
+              const SizedBox(width: 8),
+              Text(
+                "A ${(provider.incomingDistance / 1000).toStringAsFixed(1)} km de distancia",
+                style: GoogleFonts.poppins(color: Colors.white60, fontSize: 13),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // Precios
+          // Detalles del Viaje - REEMPLAZA ESTE BLOQUE EXACTO
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              // ignore: deprecated_member_use
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _priceColumn(
+                      "Ganancia Neta",
+                      _formatCurrency(trip.driverRevenue),
+                    ),
+                    Container(width: 1, height: 30, color: Colors.white10),
+                    _priceColumn("Total Viaje", _formatCurrency(trip.price)),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 15),
+                  child: Divider(color: Colors.white10),
+                ),
+                // AQUÍ SE MUESTRAN LOS DATOS REALES
+                _infoRow(
+                  "Distancia Total:",
+                  "${trip.distanceKm.toStringAsFixed(1)} km",
+                  Icons.straighten,
+                ),
+                _infoRow(
+                  "Tiempo Estimado:",
+                  "${trip.duration.toStringAsFixed(0)} min",
+                  Icons.timer_outlined,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
           _buildRouteTimeline(),
 
           const SizedBox(height: 30),
 
-          Row(
-            children: [
-              // En la fila de botones (al final de TripRequestSheet)
-              Expanded(
-                child: TextButton(
-                  onPressed: () {
-                    // AQUÍ ESTÁ EL CAMBIO:
-                    Provider.of<HomeProvider>(
-                      context,
-                      listen: false,
-                    ).rejectIncomingTrip();
-                    Navigator.pop(context); // Cerramos el modal de oferta
-                  },
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                  ),
-                  child: Text(
-                    "RECHAZAR",
-                    style: GoogleFonts.poppins(
-                      color: Colors.red[400],
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+          // Botones
+          Consumer<HomeProvider>(
+            builder: (context, provider, _) {
+              return Row(
+                children: [
+                  Expanded(
+                    child: _actionButton(
+                      "RECHAZAR",
+                      // ignore: deprecated_member_use
+                      const Color.fromARGB(255, 153, 11, 11),
+                      const Color.fromARGB(255, 255, 255, 255),
+                      onReject,
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                flex: 2,
-                child: ElevatedButton(
-                  onPressed: onAccept,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    elevation: 5,
-                    shadowColor: AppColors.primaryGreen.withValues(alpha: 0.4),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    flex: 2,
+                    child: _actionButton(
+                      "ACEPTAR VIAJE",
+                      AppColors.primaryGreen,
+                      const Color.fromARGB(255, 255, 255, 255),
+                      onAccept,
+                      isLoading: provider.isLoading,
                     ),
                   ),
-                  child: Text(
-                    "ACEPTAR VIAJE",
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
+          const SizedBox(height: 20),
         ],
       ),
     );
   }
 
+  Widget _infoRow(String label, String value, IconData icon) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Icon(icon, size: 14, color: const Color.fromARGB(255, 255, 255, 255)),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: const Color.fromARGB(255, 255, 255, 255),
+          ),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: AppColors.primaryGreen,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  );
+  // Helpers Premium
+  Widget _priceColumn(String title, String value) => Column(
+    children: [
+      Text(
+        title.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          fontSize: 9,
+          color: Colors.white38,
+          letterSpacing: 1.2,
+        ),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        value,
+        style: GoogleFonts.poppins(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+    ],
+  );
+  Widget _actionButton(
+    String text,
+    Color bg,
+    Color txt,
+    VoidCallback onTap, {
+    bool isLoading = false,
+  }) => ElevatedButton(
+    onPressed: isLoading ? null : onTap,
+    style: ElevatedButton.styleFrom(
+      backgroundColor: bg,
+      elevation: 0,
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+    ),
+    child: isLoading
+        ? const SizedBox(
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(
+              color: Colors.white,
+              strokeWidth: 2,
+            ),
+          )
+        : Text(
+            text,
+            style: GoogleFonts.montserrat(
+              color: txt,
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+            ),
+          ),
+  );
   Widget _buildRouteTimeline() {
     return Container(
-      padding: const EdgeInsets.all(15),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.grey[100]!),
+        // ignore: deprecated_member_use
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
         children: [
@@ -196,11 +296,11 @@ class TripRequestSheet extends StatelessWidget {
             trip.originAddress,
             Colors.green,
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 9),
+          const Padding(
+            padding: EdgeInsets.only(left: 7, top: 4, bottom: 4),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Container(width: 2, height: 20, color: Colors.grey[300]),
+              child: Icon(Icons.more_vert, size: 16, color: Colors.white24),
             ),
           ),
           _addressRow(
@@ -217,34 +317,22 @@ class TripRequestSheet extends StatelessWidget {
   Widget _addressRow(IconData icon, String label, String address, Color color) {
     return Row(
       children: [
-        Icon(icon, size: 18, color: color),
+        Icon(icon, size: 16, color: Colors.white30), // Icono más discreto
         const SizedBox(width: 12),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: GoogleFonts.poppins(
-                  fontSize: 10,
-                  color: Colors.grey[500],
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              Text(
-                address,
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
+          child: Text(
+            address,
+            style: GoogleFonts.poppins(fontSize: 14, color: Colors.white70),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
     );
+  }
+
+  // Pégalo justo antes del último } de la clase TripRequestSheet
+  String _formatCurrency(double amount) {
+    return "\$${amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}";
   }
 }

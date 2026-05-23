@@ -23,27 +23,29 @@ void main() async {
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  // 1. Configuración básica
+
   try {
     await dotenv.load(fileName: ".env");
   } catch (_) {}
 
+  // 1. Inicializamos GetIt
   await di.init();
   await initializeDateFormatting('es_ES', null);
 
-  // 2. Lógica de Autenticación SEGURA
+  // 2. Obtenemos las instancias desde el contenedor (YA REGISTRADAS como Singleton)
   final authProvider = di.sl<AuthProvider>();
+  final homeProvider = di.sl<HomeProvider>(); // Instancia única
 
-  // Inicializamos en false por defecto
+  // 3. Verificamos sesión
   bool isAuthenticated = false;
-
   try {
-    // Intentamos verificar el estado
     isAuthenticated = await authProvider.checkAuthStatus();
+    // Si está autenticado, inicializamos la ubicación del HomeProvider
+    if (isAuthenticated) {
+      await homeProvider.initLocation();
+    }
   } catch (e) {
     debugPrint("Error verificando auth: $e");
-    isAuthenticated =
-        false; // Si falla el servidor, lo mandamos al login (Welcome)
   }
 
   runApp(
@@ -52,9 +54,10 @@ void main() async {
         ChangeNotifierProvider.value(value: authProvider),
         ChangeNotifierProvider(create: (_) => di.sl<WalletProvider>()),
         ChangeNotifierProvider(create: (_) => di.sl<HistoryProvider>()),
-        ChangeNotifierProvider(create: (_) => HomeProvider()),
+        ChangeNotifierProvider.value(
+          value: homeProvider,
+        ), // <--- INSTANCIA ÚNICA
       ],
-      // Forzamos que el resultado siempre sea un String no nulo
       child: MyApp(initialRoute: isAuthenticated ? '/home' : '/'),
     ),
   );

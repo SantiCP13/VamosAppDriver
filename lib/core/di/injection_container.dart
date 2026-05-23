@@ -27,6 +27,7 @@ import '../../features/wallet/providers/wallet_provider.dart';
 import '../../features/history/providers/history_provider.dart';
 import '../../features/auth/providers/auth_provider.dart';
 import '../services/biometric_service.dart';
+import '../../features/home/providers/home_provider.dart';
 
 final sl = GetIt.instance;
 
@@ -69,7 +70,9 @@ Future<void> init() async {
 
   // AuthProvider: SINGLETON (La sesión del usuario es global)
   sl.registerLazySingleton<AuthProvider>(() => AuthProvider());
+  // --- INSERTA ESTO EN LA SECCIÓN 3 DE injection_container.dart ---
 
+  sl.registerLazySingleton<HomeProvider>(() => HomeProvider());
   //
   // Esto asegura que el saldo y las transacciones persistan en memoria mientras la app vive.
   sl.registerLazySingleton<WalletProvider>(

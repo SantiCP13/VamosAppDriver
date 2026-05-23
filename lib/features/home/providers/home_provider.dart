@@ -4,7 +4,13 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import 'dart:math' as math; // <-- AGREGAR ESTA LÍNEA AL INICIO
+import 'package:google_fonts/google_fonts.dart'; // <--- AGREGA ESTA LÍNEA AQUÍ
+import '../../../core/theme/app_colors.dart'; // <--- Y ESTA LÍNEA AQUÍ
+import '../../../../core/network/api_client.dart';
+import 'dart:convert';
+import 'package:dart_pusher_channels/dart_pusher_channels.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 // --------------------------------------------------------
 // IMPORTS CORE (Modelos e Inyección)
 // --------------------------------------------------------
@@ -19,7 +25,6 @@ import '../../../core/di/injection_container.dart';
 // IMPORTS SERVICES & REPOSITORIES
 // --------------------------------------------------------
 import '../services/location_service.dart';
-import '../services/trip_service.dart';
 import '../repositories/driver_repository.dart';
 import '../repositories/trip_repository.dart';
 
@@ -30,35 +35,70 @@ import '../../wallet/providers/wallet_provider.dart';
 import '../../history/providers/history_provider.dart';
 import '../widgets/payment_waiting_sheet.dart'; // <--- WIDGET DE PAGO
 import '../../auth/providers/auth_provider.dart';
+import '../../maps/services/route_service.dart'; // <--- SERVICIO DE RUTAS (OSRM)
 
 class HomeProvider extends ChangeNotifier {
   // 1. INYECCIÓN DE DEPENDENCIAS
   final LocationService _locationService = sl<LocationService>();
-  final TripService _tripService = sl<TripService>();
   final StorageService _storageService = sl<StorageService>();
   final DriverRepository _driverRepository = sl<DriverRepository>();
   final TripRepository _tripRepository = sl<TripRepository>();
+  final RouteService _routeService = RouteService(); // Instanciamos aquí
+
+  HomeProvider();
 
   // 2. ESTADO
   bool _isOnline = false;
   bool _isLoading = false;
+  String? _lastRejectedTripId;
+  // Añade estos Getters en HomeProvider.dart
+  double get activeTripDistance => _activeTrip?.distanceKm ?? 0.0;
+  // --- VARIABLES PARA CÁLCULO LOCAL DE RUTA (AHORRO API) ---
 
   // Ubicación y Rotación
   LatLng? _currentPosition;
   double _currentHeading = 0.0;
-
+  // Almacena la ubicación GPS en tiempo real enviada por el pasajero
+  // En home_provider.dart, añade este getter debajo de los otros:
+  double get incomingDistance => _incomingDistance;
+  // Para saber qué ruta estamos mostrando
+  String _incomingTripEta = "--";
   // Viaje
   Trip? _incomingTrip;
   Trip? _activeTrip;
   set activeTrip(Trip? trip) {
-    _activeTrip = trip;
+    _updateActiveTripWithPreservation(trip);
     notifyListeners();
+  }
+
+  // 1. Calcula el rumbo matemático exacto entre los movimientos del GPS local
+  double _calculateBearing(LatLng start, LatLng end) {
+    double startLat = start.latitude * (math.pi / 180.0);
+    double startLng = start.longitude * (math.pi / 180.0);
+    double endLat = end.latitude * (math.pi / 180.0);
+    double endLng = end.longitude * (math.pi / 180.0);
+
+    double dLng = endLng - startLng;
+
+    double y = math.sin(dLng) * math.cos(endLat);
+    double x =
+        math.cos(startLat) * math.sin(endLat) -
+        math.sin(startLat) * math.cos(endLat) * math.cos(dLng);
+
+    double bearing = math.atan2(y, x) * (180.0 / math.pi);
+    return (bearing + 360.0) % 360.0;
   }
 
   // 3. Mantén el getter igual
   Trip? get activeTrip => _activeTrip;
   List<LatLng> _routePoints = [];
+  set routePoints(List<LatLng> value) {
+    _routePoints = value;
+    notifyListeners();
+  }
 
+  double _totalRouteDistanceMeters = 0.0;
+  double _totalRouteDurationSeconds = 0.0;
   // Vehículos y Documentos (FUEC)
   List<Vehicle> _myVehicles = [];
   Vehicle? _selectedVehicle;
@@ -69,6 +109,8 @@ class HomeProvider extends ChangeNotifier {
   StreamSubscription? _tripSubscription;
 
   // 3. GETTERS PÚBLICOS
+  double _incomingDistance = 0;
+
   bool get isOnline => _isOnline;
   bool get isLoading => _isLoading;
   LatLng? get currentPosition => _currentPosition;
@@ -80,6 +122,29 @@ class HomeProvider extends ChangeNotifier {
   Timer? _heartbeatTimer;
   double _balance = 0.0;
   Timer? _validationTimer;
+  String get incomingTripEta => _incomingTripEta;
+  Timer? _routeRecalculateTimer;
+  // --- VARIABLES PARA MOTOR DE TRAZADO DINÁMICO (AHORRO Y PRECISIÓN) ---
+  // --- VARIABLES PARA CÁLCULO LOCAL DE RUTA (AHORRO API) ---
+  // --- VARIABLES PARA MOTOR DE TRAZADO DINÁMICO (AHORRO Y PRECISIÓN) ---
+
+  void _startRouteRecalculationTimer() {
+    _routeRecalculateTimer?.cancel();
+    _routeRecalculateTimer = Timer.periodic(const Duration(seconds: 5), (
+      timer,
+    ) {
+      if (_activeTrip != null) {
+        _calculateRouteForCurrentStatus();
+      } else {
+        _stopRouteRecalculationTimer();
+      }
+    });
+  }
+
+  void _stopRouteRecalculationTimer() {
+    _routeRecalculateTimer?.cancel();
+    _routeRecalculateTimer = null;
+  }
 
   void _showError(String message) {
     debugPrint("🚩 ERROR: $message");
@@ -93,10 +158,114 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Agrega este método dentro de tu clase HomeProvider:
+  // Reemplace el método anterior en home_provider.dart por este real:
+  Future<void> addExtraWaitingTime(int minutes) async {
+    // Asegura que tengamos un viaje activo antes de proceder
+    final trip = activeTrip; // o _activeTrip, según cómo lo tenga definido
+    if (trip == null) return;
+
+    _isLoading = true; // o la variable de carga que maneje su provider
+    notifyListeners();
+
+    try {
+      // Usamos el cliente HTTP global con sus interceptores de autorización Bearer
+      final dio = ApiClient().dio;
+
+      final response = await dio.post(
+        '/viajes/${trip.id}/adicionar-tiempo',
+        data: {'minutos': minutes},
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint("🟢 Tiempo extra registrado con éxito en el backend.");
+      } else {
+        throw Exception(
+          "El servidor retornó un código de estado: ${response.statusCode}",
+        );
+      }
+    } catch (e) {
+      debugPrint("🚨 Error al conectar con el endpoint de tiempo extra: $e");
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Variable privada que almacenará el GPS en tiempo real cuando se reciba
+  LatLng? _passengerLocation;
+  bool _hasReceivedPassengerGps =
+      false; // Guardián de señal de socket en tiempo real
+
+  // Propiedad que lee Flutter: si no hay GPS en tiempo real aún,
+  // usa automáticamente el punto de encuentro con un desfase de prueba si está en ARRIVED
+  LatLng? get passengerLocation {
+    if (_passengerLocation == null) return null;
+
+    // Si estamos esperando en el sitio pero el socket en vivo no ha reportado señal aún,
+    // desplazamos visualmente al pasajero ~45 metros para que la línea de bolitas y el marcador
+    // se aprecien perfectamente desde el primer instante en tus pruebas.
+    if (!_hasReceivedPassengerGps &&
+        _activeTrip != null &&
+        _activeTrip!.status == TripStatus.ARRIVED) {
+      return LatLng(
+        _passengerLocation!.latitude + 0.00035,
+        _passengerLocation!.longitude + 0.00035,
+      );
+    }
+    return _passengerLocation;
+  }
+
+  // Permite actualizar el GPS en tiempo real y notificar a la interfaz
+  set passengerLocation(LatLng? value) {
+    _passengerLocation = value;
+    notifyListeners();
+  }
+
   // 2. Método para limpiar el timer cuando ya no haga falta
   void _stopValidationTimer() {
     _validationTimer?.cancel();
     _validationTimer = null;
+  }
+
+  // Método para asegurar que no se pierdan datos críticos (como el teléfono)
+  // en las respuestas simplificadas de cambio de estado del servidor.
+  void _updateActiveTripWithPreservation(Trip? newTrip) {
+    if (newTrip == null) {
+      _activeTrip = null;
+      return;
+    }
+
+    if (_activeTrip != null && _activeTrip!.id == newTrip.id) {
+      final oldTrip = _activeTrip!;
+      final bool statusChanged = oldTrip.status != newTrip.status;
+
+      _activeTrip = newTrip.copyWith(
+        passengerPhone:
+            (newTrip.passengerPhone == null || newTrip.passengerPhone!.isEmpty)
+            ? oldTrip.passengerPhone
+            : newTrip.passengerPhone,
+        passengers: newTrip.passengers.isEmpty
+            ? oldTrip.passengers
+            : newTrip.passengers,
+        fuecUrl: (newTrip.fuecUrl == null || newTrip.fuecUrl!.isEmpty)
+            ? oldTrip.fuecUrl
+            : newTrip.fuecUrl,
+      );
+
+      // Si cambió el estado, reseteamos la polilínea y métricas para forzar recálculo fresco
+      if (statusChanged) {
+        _routePoints = [];
+        _totalRouteDistanceMeters = 0.0;
+        _totalRouteDurationSeconds = 0.0;
+      }
+    } else {
+      _activeTrip = newTrip;
+      _routePoints = [];
+      _totalRouteDistanceMeters = 0.0;
+      _totalRouteDurationSeconds = 0.0;
+    }
   }
 
   // 3. Método de validación que llamaremos al recibir una oferta
@@ -131,26 +300,164 @@ class HomeProvider extends ChangeNotifier {
     });
   }
 
-  // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
-  String get distanceToTarget {
-    if (_currentPosition == null || _activeTrip == null) return "---";
+  Future<void> calculateIncomingTripRoute() async {
+    if (currentPosition == null || incomingTrip == null) return;
 
+    try {
+      final routeResult = await _routeService.getRoute(
+        currentPosition!,
+        incomingTrip!.originLocation,
+      );
+      _incomingDistance = routeResult.distanceMeters.toDouble();
+
+      // 🔥 CAMBIO: Solo asignamos los puntos si NO hay viaje entrante
+      // O si quieres borrarlos:
+      if (incomingTrip != null) {
+        // Si hay oferta, NO guardamos los puntos en la lista global que usa el mapa
+        // Pero si quieres que el conductor la vea luego de aceptar,
+        // esto es lo que está pasando.
+      }
+
+      // Si quieres que el mapa esté vacío mientras llega la oferta:
+      routePoints = [];
+
+      int minutes = (routeResult.durationSeconds / 60).round();
+      _incomingTripEta = minutes > 0 ? "$minutes min" : "Llegando";
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Error calculando ruta: $e");
+    }
+  }
+
+  // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
+  double get remainingDistanceMeters {
+    if (_currentPosition == null || _activeTrip == null) return 0.0;
     const Distance distance = Distance();
 
-    // Punto objetivo: Si voy a recoger -> Origen. Si ya inicié -> Destino.
     LatLng target =
         (_activeTrip!.status == TripStatus.ACCEPTED ||
             _activeTrip!.status == TripStatus.ARRIVED)
         ? _activeTrip!.originLocation
         : _activeTrip!.destinationLocation;
 
-    double meterDist = distance.as(LengthUnit.Meter, _currentPosition!, target);
+    return distance.as(LengthUnit.Meter, _currentPosition!, target);
+  }
 
-    if (meterDist < 1000) {
-      return "${meterDist.toStringAsFixed(0)} m";
+  // Getter de distancia formateado dinámico (Alineado al 100% con Pasajero)
+  String get distanceToTarget {
+    if (_currentPosition == null || _activeTrip == null) return "---";
+
+    LatLng target = _activeTrip!.status == TripStatus.STARTED
+        ? (_routePoints.isNotEmpty
+              ? _routePoints.last
+              : _activeTrip!.destinationLocation)
+        : _activeTrip!.originLocation;
+
+    double streetMeters = 0.0;
+
+    if (_routePoints.isNotEmpty) {
+      // Distancia desde el auto hasta el primer punto de la polilínea restante
+      streetMeters += Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        _routePoints.first.latitude,
+        _routePoints.first.longitude,
+      );
+
+      // Suma de los segmentos restantes de la polilínea
+      for (int i = 0; i < _routePoints.length - 1; i++) {
+        streetMeters += Geolocator.distanceBetween(
+          _routePoints[i].latitude,
+          _routePoints[i].longitude,
+          _routePoints[i + 1].latitude,
+          _routePoints[i + 1].longitude,
+        );
+      }
     } else {
-      return "${(meterDist / 1000).toStringAsFixed(1)} km";
+      // Fallback por si la ruta de OSRM aún no ha cargado
+      double straightMeters = Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        target.latitude,
+        target.longitude,
+      );
+      streetMeters = straightMeters * 1.43;
     }
+
+    if (streetMeters <= 0) return "---";
+    if (streetMeters < 1000) {
+      return "${streetMeters.toStringAsFixed(0)} m";
+    } else {
+      return "${(streetMeters / 1000).toStringAsFixed(1)} km";
+    }
+  }
+
+  // Getter de duración dinámico (Sincronizado con Pasajero y Google Maps)
+  double get activeTripDuration {
+    if (_currentPosition == null || _activeTrip == null) return 0.0;
+
+    LatLng target = _activeTrip!.status == TripStatus.STARTED
+        ? (_routePoints.isNotEmpty
+              ? _routePoints.last
+              : _activeTrip!.destinationLocation)
+        : _activeTrip!.originLocation;
+
+    double streetMeters = 0.0;
+
+    if (_routePoints.isNotEmpty) {
+      streetMeters += Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        _routePoints.first.latitude,
+        _routePoints.first.longitude,
+      );
+      for (int i = 0; i < _routePoints.length - 1; i++) {
+        streetMeters += Geolocator.distanceBetween(
+          _routePoints[i].latitude,
+          _routePoints[i].longitude,
+          _routePoints[i + 1].latitude,
+          _routePoints[i + 1].longitude,
+        );
+      }
+    } else {
+      double straightMeters = Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        target.latitude,
+        target.longitude,
+      );
+      streetMeters = straightMeters * 1.43;
+    }
+
+    // Filtro para evitar residuos de la fase de recogida
+    bool isStale =
+        _activeTrip!.status == TripStatus.STARTED &&
+        (_totalRouteDistanceMeters < streetMeters ||
+            _totalRouteDistanceMeters <= 500.0);
+
+    double calculatedMinutes;
+    if (_totalRouteDistanceMeters > 0 &&
+        _totalRouteDurationSeconds > 0 &&
+        !isStale) {
+      double ratio = streetMeters / _totalRouteDistanceMeters;
+      if (ratio > 1.0) ratio = 1.0;
+      if (ratio < 0.0) ratio = 0.0;
+      calculatedMinutes = (_totalRouteDurationSeconds * ratio) / 60.0;
+    } else {
+      // Velocidad unificada de estimación real en ciudad con tráfico a 13.5 km/h (225 metros/minuto)
+      // Esto garantiza sincronización perfecta con Google Maps (4 min para ~850-900 metros)
+      calculatedMinutes = streetMeters / 225.0;
+    }
+
+    if (streetMeters < 30) {
+      return 0.0;
+    }
+
+    int mins = calculatedMinutes.round();
+    if (streetMeters > 0 && mins < 1) mins = 1;
+
+    return mins.toDouble();
   }
   // =======================================================
   // A. INICIALIZACIÓN Y GPS
@@ -182,21 +489,38 @@ class HomeProvider extends ChangeNotifier {
     }
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
-      // 1. ANTES DE PONERLO EN _activeTrip, preguntamos al servidor si ese viaje sigue vigente
       final tripReal = await _tripRepository.getActiveTrip();
 
       if (tripReal != null && tripReal.id == savedTrip.id) {
-        _activeTrip = tripReal; // Es real, lo cargamos
+        // Preservamos teléfono, pasajeros y FUEC del storage local si la API remota viene simplificada
+        _activeTrip = tripReal.copyWith(
+          passengerPhone:
+              (tripReal.passengerPhone == null ||
+                  tripReal.passengerPhone!.isEmpty)
+              ? savedTrip.passengerPhone
+              : tripReal.passengerPhone,
+          passengers: tripReal.passengers.isEmpty
+              ? savedTrip.passengers
+              : tripReal.passengers,
+          fuecUrl: (tripReal.fuecUrl == null || tripReal.fuecUrl!.isEmpty)
+              ? savedTrip.fuecUrl
+              : tripReal.fuecUrl,
+        );
         _isOnline = true;
         _startListeningTrips();
+
+        // --- INICIALIZACIÓN ÚNICA DE PARTIDA ---
+        _passengerLocation = tripReal.originLocation;
+
+        _startPassengerGpsListener(_activeTrip!.id);
+        _startRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
+
         await _calculateRouteForCurrentStatus();
       } else {
-        // Es un fantasma, bórralo
         await _storageService.clearCurrentTrip();
         _activeTrip = null;
       }
     }
-
     // 2. Permisos y GPS
     final hasPermission = await _locationService.checkPermissions();
     if (hasPermission) {
@@ -241,31 +565,41 @@ class HomeProvider extends ChangeNotifier {
         newLocation,
       );
 
-      // 1. Si está ONLINE pero NO está en un viaje, enviar "Heartbeat" de disponibilidad
+      // 1. Si está ONLINE pero NO está en un servicio, enviar posición de disponibilidad
       if (_isOnline && _activeTrip == null && dist > 10.0) {
         _driverRepository.updatePosition(pos.latitude, pos.longitude);
       }
 
-      // 2. Si está en un VIAJE ACTIVO, enviar tracking para el pasajero (PuntoTrackingEvent)
-      if (_activeTrip?.status == TripStatus.STARTED && dist > 15.0) {
-        _tripRepository.updateLocation(
-          _activeTrip!.id,
-          pos.latitude,
-          pos.longitude,
-        );
+      // 2. Si está en un viaje activo, transmitir la ubicación y actualizar la ruta
+      if (_activeTrip != null) {
+        final bool enServicioActivo =
+            _activeTrip!.status == TripStatus.ACCEPTED ||
+            _activeTrip!.status == TripStatus.ARRIVED ||
+            _activeTrip!.status == TripStatus.STARTED;
+
+        if (enServicioActivo && dist > 5.0) {
+          _tripRepository.updateLocation(
+            _activeTrip!.id,
+            pos.latitude,
+            pos.longitude,
+          );
+
+          // --- CORRECCIÓN: Recalcular la ruta OSRM en tiempo real al avanzar ---
+          _calculateRouteForCurrentStatus();
+        }
       }
 
-      if (dist > 2.0 && pos.heading > 0) {
+      // --- Estabilización del ángulo del vehículo (Rumbo Vectorial) ---
+      if (dist > 1.5) {
+        _currentHeading = _calculateBearing(_currentPosition!, newLocation);
+      } else if (pos.heading > 0) {
         _currentHeading = pos.heading;
       }
     }
 
     _currentPosition = newLocation;
     notifyListeners();
-  }
-  // =======================================================
-  // B. GESTIÓN DE VEHÍCULOS (REQUISITO FUEC)
-  // =======================================================
+  } // =======================================================
 
   Future<void> loadVehicles() async {
     // BORRA O COMENTA ESTA LÍNEA:
@@ -432,29 +766,51 @@ class HomeProvider extends ChangeNotifier {
     _tripSubscription?.cancel();
 
     _tripSubscription = _tripRepository.listenForTrips().listen((trip) {
-      debugPrint("📡 [SOCKET] Evento: ${trip.status} para viaje ${trip.id}");
-
-      if (trip.status == TripStatus.CANCELLED ||
-          trip.status == TripStatus.COMPLETED) {
-        debugPrint("🛑 [SOCKET] Limpieza forzada de oferta/viaje activo.");
-        _incomingTrip = null; // ESTO ES LO QUE TE FALTABA
-        _activeTrip = null;
-        _finishTrip();
-        return;
-      }
-
-      if (trip.status == TripStatus.ACCEPTED) {
-        _activeTrip = trip;
-        _incomingTrip = null; // Quita la oferta
-        notifyListeners();
-      } else {
-        if (trip.status == TripStatus.PENDING) {
-          _incomingTrip = trip;
-          _startValidationTimer(
-            trip.assignmentId ?? trip.id,
-          ); // <--- INICIAR VALIDACIÓN
-          notifyListeners();
+      try {
+        debugPrint("📡 [SOCKET] Evento: ${trip.status} para viaje ${trip.id}");
+        // ignore: unrelated_type_equality_checks
+        if (trip.status == 'NO_DISPONIBLE' && _incomingTrip?.id == trip.id) {
+          debugPrint("🧹 [SOCKET] Limpiando alerta: viaje tomado por otro.");
+          _incomingTrip = null;
+          notifyListeners(); // Esto le dirá a Flutter que reconstruya la UI sin el modal
+          return;
         }
+
+        if (trip.status == TripStatus.CANCELLED ||
+            trip.status == TripStatus.COMPLETED) {
+          debugPrint("🛑 [SOCKET] Limpieza controlada.");
+          _finishTrip();
+          return;
+        }
+
+        if (trip.status == TripStatus.ACCEPTED) {
+          _updateActiveTripWithPreservation(trip);
+          _incomingTrip = null;
+          notifyListeners();
+        } else if (trip.status == TripStatus.PENDING) {
+          // BLINDAJE: Si es el mismo viaje que acabamos de rechazar, ignoramos el evento
+          if (_lastRejectedTripId == trip.id) {
+            debugPrint(
+              "⚠️ [SOCKET] Ignorando evento PENDING de viaje recientemente rechazado.",
+            );
+            return;
+          }
+
+          debugPrint("ℹ️ [SOCKET] Nueva oferta PENDING detectada: ${trip.id}");
+          _incomingTrip = trip;
+          calculateIncomingTripRoute();
+
+          // BLINDAJE: Verificamos que el viaje tenga datos mínimos antes de notificar
+          if (_incomingTrip != null) {
+            _startValidationTimer(
+              _incomingTrip!.assignmentId ?? _incomingTrip!.id,
+            );
+            notifyListeners();
+          }
+        }
+      } catch (e, stackTrace) {
+        debugPrint("🚨 [CRITICO] Error procesando evento de socket: $e");
+        debugPrint(stackTrace.toString()); // Esto nos dirá qué widget colapsó
       }
     });
   }
@@ -491,19 +847,20 @@ class HomeProvider extends ChangeNotifier {
         _currentPosition!.longitude,
       );
 
-      // --- CAMBIO AQUÍ: Actualizamos estados PRIMERO ---
       _activeTrip = acceptedTrip;
-      _incomingTrip = null; // Esto quita el panel de "Oferta" inmediatamente
-      _isLoading =
-          false; // Quitamos el loading para que el botón no se quede gris
+      _incomingTrip = null;
+      _isLoading = false;
 
-      // Notificamos para que la UI cambie a TripPanelSheet de inmediato
+      // --- INICIALIZACIÓN ÚNICA DE PARTIDA ---
+      _passengerLocation = acceptedTrip.originLocation;
+
+      _startPassengerGpsListener(_activeTrip!.id);
+      _startRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
+
       notifyListeners();
 
-      // --- LUEGO: Guardamos y calculamos la ruta en segundo plano ---
       await _storageService.saveCurrentTrip(_activeTrip!);
       await _calculateRouteForCurrentStatus();
-      // (Nota: _calculateRouteForCurrentStatus ya llama a notifyListeners al final)
     } catch (e) {
       debugPrint("Error al aceptar viaje: $e");
       _isLoading = false;
@@ -512,27 +869,97 @@ class HomeProvider extends ChangeNotifier {
   }
 
   Future<void> rejectIncomingTrip() async {
-    // 1. Verificación de seguridad
     if (_incomingTrip == null) return;
 
-    _isLoading = true;
-    notifyListeners();
+    // Guardamos el ID antes de limpiar
+    _lastRejectedTripId = _incomingTrip!.id;
 
     try {
       final idParaResponder = _incomingTrip!.assignmentId ?? _incomingTrip!.id;
-
-      // 2. Llamada al repo (que ya no lanza throw)
       await _tripRepository.rejectTrip(idParaResponder);
-    } catch (e) {
-      debugPrint("Error no controlado en UI: $e");
-    } finally {
-      // 3. LIMPIEZA FORZADA
-      // Independientemente de si el servidor respondió bien o mal,
-      // para el conductor este viaje YA NO EXISTE.
+
       _incomingTrip = null;
-      _isLoading = false;
       notifyListeners();
+    } catch (e) {
+      debugPrint("Error: $e");
     }
+
+    // Limpiamos el filtro después de unos segundos
+    Future.delayed(
+      const Duration(seconds: 5),
+      () => _lastRejectedTripId = null,
+    );
+  }
+
+  PusherChannelsClient? _passengerPusherClient;
+  StreamSubscription? _passengerGpsSubscription;
+
+  void _startPassengerGpsListener(String tripId) async {
+    _passengerGpsSubscription?.cancel();
+    _passengerPusherClient?.disconnect();
+
+    const storage = FlutterSecureStorage();
+    final token = await storage.read(key: 'auth_token');
+    if (token == null) return;
+
+    _passengerPusherClient = PusherChannelsClient.websocket(
+      options: PusherChannelsOptions.fromHost(
+        scheme: 'wss',
+        host: 'api.vamosapp.com.co',
+        port: 443,
+        key: '06exymiubefjjglwmvqe',
+      ),
+      connectionErrorHandler: (exception, trace, client) {
+        debugPrint(
+          "🚨 Error de Sockets en Conductor (Rastreo Pasajero): $exception",
+        );
+      },
+    );
+
+    _passengerPusherClient!.eventStream.listen((event) {
+      if (event.name == 'pusher:connection_established') {
+        debugPrint("✅ Conectado a Reverb para rastreo de pasajero.");
+
+        final channel = _passengerPusherClient!.privateChannel(
+          'private-viaje.$tripId',
+          authorizationDelegate: DriverPusherAuth(token: token),
+        );
+
+        channel.subscribe();
+
+        _passengerGpsSubscription = channel.bind('PasajeroTracking').listen((
+          e,
+        ) {
+          if (e.data != null) {
+            try {
+              final data = json.decode(e.data!);
+              final double lat = double.parse(data['lat'].toString());
+              final double lng = double.parse(data['lng'].toString());
+
+              // ACTIVAR ENTRADA DE DATOS REALES
+              _hasReceivedPassengerGps = true;
+
+              // Actualiza la posición y notifica a HomeScreen del conductor
+              passengerLocation = LatLng(lat, lng);
+            } catch (ex) {
+              debugPrint(
+                "Error procesando GPS de pasajero en tiempo real: $ex",
+              );
+            }
+          }
+        });
+      }
+    });
+
+    _passengerPusherClient!.connect();
+  }
+
+  void _stopPassengerGpsListener() {
+    _passengerGpsSubscription?.cancel();
+    _passengerGpsSubscription = null;
+    _passengerPusherClient?.disconnect();
+    _passengerLocation = null;
+    _hasReceivedPassengerGps = false; // <- AGREGAR ESTA LÍNEA AQUÍ
   }
 
   /// --- NUEVO: Lógica unificada de cancelación (Conductor) ---
@@ -561,8 +988,99 @@ class HomeProvider extends ChangeNotifier {
   // =======================================================
 
   /// Método principal llamado por el botón grande del panel
+  /// Método principal llamado por el botón grande del panel
   Future<void> handleTripAction(BuildContext context) async {
     if (_activeTrip == null) return;
+
+    // --- BLINDAJE DE DISTANCIA AL MARCAR LLEGADA al sitio (Estado ACCEPTED -> ARRIVED) ---
+    if (_activeTrip!.status == TripStatus.ACCEPTED) {
+      if (_currentPosition == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "No se pudo validar tu ubicación GPS actual. Espera un momento.",
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
+      // Calculamos la distancia en metros entre el conductor y el origen del viaje
+      const Distance distance = Distance();
+      final double distanceInMeters = distance.as(
+        LengthUnit.Meter,
+        _currentPosition!,
+        _activeTrip!.originLocation,
+      );
+
+      // Si está a más de 100 metros, mostramos alerta y bloqueamos el avance de estado
+      if (distanceInMeters > 100.0) {
+        showDialog(
+          context: context,
+          builder: (ctx) => Dialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            backgroundColor: const Color(0xFF1F2937),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.location_off_rounded,
+                    color: AppColors.primaryGreen,
+                    size: 50,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    "Demasiado lejos",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "Estás a ${distanceInMeters.toStringAsFixed(0)} metros. Para marcar tu llegada, debes acercarte a menos de 100 metros del punto de recogida.",
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.grey[300],
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            AppColors.primaryGreen, // Verde esmeralda premium
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text(
+                        "ENTENDIDO",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        return; // Bloquea la ejecución y no avanza el estado
+      }
+    }
 
     // 1. SI ESTAMOS EN RUTA -> LLEGAMOS AL DESTINO -> INICIAR FLUJO DE COBRO
     if (_activeTrip!.status == TripStatus.STARTED) {
@@ -589,9 +1107,11 @@ class HomeProvider extends ChangeNotifier {
         "DROPPED_OFF",
       );
 
-      _activeTrip = updatedTrip;
+      _updateActiveTripWithPreservation(updatedTrip);
       await _storageService.saveCurrentTrip(_activeTrip!);
+      _routePoints = [];
 
+      await _calculateRouteForCurrentStatus();
       _isLoading = false;
       notifyListeners();
 
@@ -667,7 +1187,7 @@ class HomeProvider extends ChangeNotifier {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "✅ Viaje finalizado. Tu ganancia neta: \$$gananciaFormateada",
+              "Viaje finalizado. Tu ganancia neta: \$$gananciaFormateada",
             ),
             backgroundColor: Colors.green[800],
             behavior: SnackBarBehavior.floating,
@@ -706,15 +1226,19 @@ class HomeProvider extends ChangeNotifier {
       final updatedTrip = await _tripRepository.updateTripStatus(
         _activeTrip!.id,
         statusName,
-        // 🔥 AQUÍ PASAMOS EL GPS ACTUAL DEL EMULADOR
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
       );
-      _activeTrip = updatedTrip;
+
+      _updateActiveTripWithPreservation(updatedTrip);
       await _storageService.saveCurrentTrip(_activeTrip!);
+
+      // Limpiamos referencias de polilínea para forzar cálculo fresco en el nuevo estado
+      _routePoints = [];
+
       await _calculateRouteForCurrentStatus();
       notifyListeners();
-      return updatedTrip;
+      return _activeTrip;
     } catch (e) {
       debugPrint("Error actualizando estado: $e");
       rethrow;
@@ -722,10 +1246,16 @@ class HomeProvider extends ChangeNotifier {
   }
 
   void _finishTrip() {
+    debugPrint("DEBUG: _finishTrip ejecutado.");
+
+    _stopPassengerGpsListener();
+    _stopRouteRecalculationTimer();
+
     _activeTrip = null;
     _routePoints = [];
+
     _storageService.clearCurrentTrip();
-    _startListeningTrips(); // Vuelvo a escuchar ofertas
+    _startListeningTrips();
     notifyListeners();
   }
 
@@ -796,22 +1326,80 @@ class HomeProvider extends ChangeNotifier {
     if (_activeTrip == null || _currentPosition == null) return;
 
     LatLng? destination;
-
-    // 🚩 Si voy a buscar al pasajero o ya estoy ahí esperando:
     if (_activeTrip!.status == TripStatus.ACCEPTED ||
         _activeTrip!.status == TripStatus.ARRIVED) {
       destination = _activeTrip!.originLocation; // Punto de recogida
-    }
-    // 🚩 Si el pasajero ya subió y el viaje inició:
-    else if (_activeTrip!.status == TripStatus.STARTED) {
-      destination = _activeTrip!.destinationLocation; // Punto de destino
+    } else if (_activeTrip!.status == TripStatus.STARTED) {
+      destination = _activeTrip!.destinationLocation; // Destino final
     }
 
-    if (destination != null) {
-      _routePoints = await _tripService.getRoutePolyline(
-        _currentPosition!,
-        destination,
+    if (destination == null) return;
+
+    double straightToTarget = Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    bool isStale =
+        _activeTrip!.status == TripStatus.STARTED &&
+        (_totalRouteDistanceMeters < straightToTarget ||
+            _totalRouteDistanceMeters <= 500.0);
+
+    // 1. Trazado inicial: Si no hay ruta en memoria o detectamos datos obsoletos (stale)
+    if (_routePoints.isEmpty || isStale) {
+      try {
+        final routeResult = await _routeService
+            .getRoute(_currentPosition!, destination)
+            .timeout(const Duration(seconds: 5));
+
+        _routePoints = routeResult.points;
+        _totalRouteDistanceMeters = routeResult.distanceMeters.toDouble();
+        _totalRouteDurationSeconds = routeResult.durationSeconds.toDouble();
+        notifyListeners();
+      } catch (e) {
+        debugPrint("Error obteniendo ruta inicial del viaje (Conductor): $e");
+      }
+      return;
+    }
+
+    // 2. Medir desvío
+    int closestIndex = 0;
+    double minDistanceToRoute = double.infinity;
+
+    for (int i = 0; i < _routePoints.length; i++) {
+      double d = Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        _routePoints[i].latitude,
+        _routePoints[i].longitude,
       );
+      if (d < minDistanceToRoute) {
+        minDistanceToRoute = d;
+        closestIndex = i;
+      }
+    }
+
+    if (minDistanceToRoute > 250.0) {
+      try {
+        final routeResult = await _routeService
+            .getRoute(_currentPosition!, destination)
+            .timeout(const Duration(seconds: 5));
+
+        _routePoints = routeResult.points;
+        _totalRouteDistanceMeters = routeResult.distanceMeters.toDouble();
+        _totalRouteDurationSeconds = routeResult.durationSeconds.toDouble();
+        notifyListeners();
+      } catch (e) {
+        debugPrint("Error recalculando desvío en ruta (Conductor): $e");
+      }
+      return;
+    }
+
+    // 3. Borrado local del trayecto recorrido
+    if (closestIndex < _routePoints.length) {
+      _routePoints = _routePoints.sublist(closestIndex);
       notifyListeners();
     }
   }
@@ -821,7 +1409,43 @@ class HomeProvider extends ChangeNotifier {
     _positionSubscription?.cancel();
     _tripSubscription?.cancel();
     _heartbeatTimer?.cancel();
+    _stopPassengerGpsListener(); // <--- AGREGUE ESTA LÍNEA AQUÍ
+    _stopRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
 
     super.dispose();
+  }
+}
+
+class DriverPusherAuth
+    implements
+        EndpointAuthorizableChannelAuthorizationDelegate<
+          PrivateChannelAuthorizationData
+        > {
+  final String token;
+  DriverPusherAuth({required this.token});
+
+  @override
+  EndpointAuthFailedCallback? get onAuthFailed =>
+      (exception, trace) =>
+          debugPrint("Error Auth Sockets Conductor: $exception");
+
+  @override
+  Future<PrivateChannelAuthorizationData> authorizationData(
+    String socketId,
+    String channelName,
+  ) async {
+    final dio = ApiClient().dio;
+    try {
+      final response = await dio.post(
+        '/broadcasting/auth',
+        data: {'socket_id': socketId, 'channel_name': channelName},
+      );
+      return PrivateChannelAuthorizationData(
+        authKey: response.data['auth'] ?? '',
+      );
+    } catch (e) {
+      debugPrint("🚨 Error en autenticación de sockets del conductor: $e");
+      rethrow;
+    }
   }
 }
