@@ -60,7 +60,8 @@ class TripPanelSheet extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _stateHeaderLabel(trip.status, primaryColor),
-                  if (isStarted) _fuecButton(trip, context),
+                  // CAMBIO: Permitimos abrir el FUEC en cualquier estado del viaje activo
+                  _fuecButton(trip, context),
                 ],
               ),
               const SizedBox(height: 18),
@@ -103,7 +104,7 @@ class TripPanelSheet extends StatelessWidget {
     );
   }
 
-  // --- ETIQUETA DE ESTADO LIMPIA Y DIRECTA (REEMPLAZA EL STATUS BADGE ANTERIOR) ---
+  // --- ETIQUETA DE ESTADO LIMPIA Y DIRECTA ---
   Widget _stateHeaderLabel(TripStatus status, Color activeColor) {
     final String labelText = status == TripStatus.STARTED
         ? "VIAJE EN CURSO"
@@ -146,7 +147,15 @@ class TripPanelSheet extends StatelessWidget {
 
   Widget _fuecButton(Trip trip, BuildContext context) {
     return InkWell(
-      onTap: () => _openFuec(trip.fuecUrl, context),
+      onTap: () {
+        // CAMBIO: Se implementa la URL de respaldo basada en el endpoint del backend
+        final String fallbackUrl =
+            (trip.fuecUrl != null && trip.fuecUrl!.isNotEmpty)
+            ? trip.fuecUrl!
+            : "https://api.vamosapp.com.co/api/viajes/${trip.id}/fuec/pdf-interno";
+
+        _openFuec(fallbackUrl, context);
+      },
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

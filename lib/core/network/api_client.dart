@@ -44,6 +44,8 @@ class ApiClient {
               '/password/email', // <--- AGREGADO
               '/password/code/check', // <--- AGREGADO
               '/password/reset', // <--- AGREGADO
+              '/empresas', // <--- Agregar para permitir consultar empresas sin token
+              '/empresas/afiliar',
             ];
 
             if (!publicPaths.contains(options.path)) {

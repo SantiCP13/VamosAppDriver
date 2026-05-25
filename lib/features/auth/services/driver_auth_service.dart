@@ -1,12 +1,15 @@
+// driver_auth_service.dart
+import 'dart:async';
+import 'dart:convert'; // 👈 Agregado para el manejo de JSON de caché offline
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-//import 'package:shared_preferences/shared_preferences.dart'; // <--- Faltaba este
+import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // 👈 Asegúrate de tener este import si se requiere interactuar directamente
 
-// IMPORTANTE: Asegúrate de que estas rutas sean las correctas en tu carpeta lib
+// IMPORTANTE: Rutas de importación del núcleo de tu aplicación
 import '../../../core/network/api_client.dart';
 import '../../../core/models/user_model.dart';
-import '../../../core/services/storage_service.dart'; // <--- Faltaba este
+import '../../../core/services/storage_service.dart';
 import '../../../core/di/injection_container.dart';
 
 class DriverAuthService {
@@ -18,8 +21,6 @@ class DriverAuthService {
 
   User? _currentUser;
   User? get currentUser => _currentUser;
-
-  // Ubicación: lib/features/auth/services/driver_auth_service.dart
 
   Future<User> login(
     String email,
@@ -33,24 +34,23 @@ class DriverAuthService {
         data: {
           'email': email,
           'password': password,
-          'device_name': deviceName, // Nombre real del cel (ej: Samsung S21)
+          'device_name': deviceName,
           'device_id': deviceId,
-          'app_type': 'DRIVER', // <--- ENVÍA ESTO AL BACKEND
+          'app_type': 'DRIVER',
         },
       );
 
       final userData = response.data['data']['user'];
       final String token = response.data['data']['token'];
 
-      // 1. VALIDACIÓN DE ROL (DEBE SER 3)
-      // En tu backend Laravel el id_role suele venir como 'role_id' o en el objeto 'role'
-      // Buscamos en 'id_role' (como está en tu DB) o en 'role_id' por si Laravel lo renombra
+      // --- CORRECCIÓN DE ROL: Sincronizado a Rol 6 (Conductor) ---
       final int roleId =
           int.tryParse(
             (userData['id_role'] ?? userData['role_id'])?.toString() ?? '0',
           ) ??
           0;
-      if (roleId != 3) {
+
+      if (roleId != 6) {
         throw Exception('Esta cuenta no está registrada como Conductor.');
       }
 
@@ -71,14 +71,11 @@ class DriverAuthService {
       if (e.response != null && e.response?.data != null) {
         final data = e.response!.data;
 
-        // --- SEGURIDAD PROACTIVA ---
-        // Si el servidor rechaza las credenciales (422) o la cuenta (403/401)
-        // significa que lo que tenemos guardado en el celular YA NO SIRVE.
         if (e.response!.statusCode == 422 ||
             e.response!.statusCode == 403 ||
             e.response!.statusCode == 401) {
-          await sl<StorageService>()
-              .deleteAll(); // Borramos huella y clave local de inmediato
+          await sl<StorageService>().deleteAll();
+          await const FlutterSecureStorage().delete(key: 'cached_driver');
           debugPrint("Credenciales locales invalidadas por el servidor.");
         }
 
@@ -92,13 +89,12 @@ class DriverAuthService {
     }
   }
 
-  // --- VALIDAR SESIÓN AL INICIO ---
+  // --- OBTENCIÓN DE SESIÓN CON RESILIENCIA OFFLINE ---
   Future<UserVerificationStatus?> verifySessionAndGetStatus() async {
     try {
       final storage = sl<StorageService>();
       final token = await storage.getToken();
 
-      // SI NO HAY TOKEN, NO INTENTES IR AL SERVIDOR
       if (token == null || token.isEmpty) {
         return null;
       }
@@ -107,18 +103,46 @@ class DriverAuthService {
 
       if (response.data['data'] != null) {
         _currentUser = User.fromMap(response.data['data']);
+
+        // Guardamos en caché local para tener los datos disponibles si nos quedamos sin señal
+        await const FlutterSecureStorage().write(
+          key: 'cached_driver',
+          value: jsonEncode(response.data['data']),
+        );
+
         return _currentUser!.verificationStatus;
       }
       return null;
     } catch (e) {
-      // Si el servidor da error (como el 401), devolvemos null
-      // El ApiClient ya se encargará de limpiar el token
+      if (e is DioException) {
+        // Si el servidor confirma explícitamente problemas con el token, forzamos null (logout)
+        if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
+          debugPrint("Sesión invalidada por el servidor (401/403).");
+          return null;
+        }
+      }
+
+      // Si es un error de red o de comunicación, cargamos los datos desde la caché local
+      debugPrint(
+        "Fallo de red al validar sesión. Intentando recuperar caché local del conductor.",
+      );
+      try {
+        final cachedDriverStr = await const FlutterSecureStorage().read(
+          key: 'cached_driver',
+        );
+        if (cachedDriverStr != null) {
+          final Map<String, dynamic> userData = jsonDecode(cachedDriverStr);
+          _currentUser = User.fromMap(userData);
+          return _currentUser!.verificationStatus;
+        }
+      } catch (err) {
+        debugPrint("Error cargando caché local: $err");
+      }
+
       return null;
     }
   }
 
-  // --- NUEVO: VERIFICAR SI EL EMAIL EXISTE Y ES CONDUCTOR ---
-  // --- ACTUALIZADO: Recibe email y deviceId ---
   Future<Map<String, dynamic>> checkAccount(
     String email,
     String deviceId,
@@ -126,10 +150,7 @@ class DriverAuthService {
     try {
       final response = await _apiClient.dio.post(
         '/check-account',
-        data: {
-          'email': email,
-          'device_id': deviceId, // <--- Enviamos el ID al backend
-        },
+        data: {'email': email, 'device_id': deviceId},
       );
 
       return response.data['data'];
@@ -145,7 +166,6 @@ class DriverAuthService {
     }
   }
 
-  // --- REGISTER (TODO EN UNO) ---
   Future<User> register({
     required String name,
     required String email,
@@ -153,21 +173,18 @@ class DriverAuthService {
     required String password,
     required String passwordConfirmation,
     required String documento,
-    required String tipoDocumento, // <--- AGREGA ESTA LÍNEA
-
+    required String tipoDocumento,
     required String fvLicencia,
     required File selfieFile,
     required File cedulaFile,
-    required File licenciaFile, // <--- NUEVO
+    required File licenciaFile,
   }) async {
     await _apiClient.simulateDelay();
 
     try {
       String selfieName = selfieFile.path.split('/').last;
       String cedulaName = cedulaFile.path.split('/').last;
-      String licenciaName = licenciaFile.path
-          .split('/')
-          .last; // <--- AGREGA ESTA LÍNEA
+      String licenciaName = licenciaFile.path.split('/').last;
 
       final formData = FormData.fromMap({
         'nombre': name,
@@ -179,7 +196,7 @@ class DriverAuthService {
         'fv_licencia': fvLicencia,
         'password': password,
         'password_confirmation': passwordConfirmation,
-        'role': 3,
+        'role': 6,
         'selfie': await MultipartFile.fromFile(
           selfieFile.path,
           filename: selfieName,
@@ -190,12 +207,12 @@ class DriverAuthService {
         ),
         'licencia_pdf': await MultipartFile.fromFile(
           licenciaFile.path,
-          filename: licenciaName, // <--- AHORA YA NO DARÁ ERROR
+          filename: licenciaName,
         ),
       });
 
       final response = await _apiClient.dio.post(
-        '/register', // CORRECCIÓN: Antes era '/driver/register'
+        '/register',
         data: formData,
         options: Options(
           sendTimeout: const Duration(seconds: 60),
@@ -203,7 +220,15 @@ class DriverAuthService {
         ),
       );
 
-      _currentUser = User.fromMap(response.data['data']['user']);
+      final userData = response.data['data']['user'];
+      _currentUser = User.fromMap(userData);
+
+      // Guardamos el perfil en caché
+      await const FlutterSecureStorage().write(
+        key: 'cached_driver',
+        value: jsonEncode(userData),
+      );
+
       return _currentUser!;
     } on DioException catch (e) {
       if (e.response != null) {
@@ -217,8 +242,7 @@ class DriverAuthService {
       }
       throw Exception(e.message ?? 'Error en registro');
     }
-  } // --- PERFIL DE USUARIO ---
-  // --- RECUPERACIÓN DE CONTRASEÑA REAL ---
+  }
 
   Future<void> sendPasswordResetCode(String email) async {
     try {
@@ -261,7 +285,6 @@ class DriverAuthService {
     await _apiClient.simulateDelay();
 
     if (_apiClient.isMockOnly) {
-      debugPrint("MOCK UPLOAD PROFILE IMAGE: $path");
       return "https://i.pravatar.cc/300?u=${DateTime.now().millisecondsSinceEpoch}";
     }
 
@@ -286,7 +309,7 @@ class DriverAuthService {
     required String name,
     required String phone,
     required String email,
-    File? imageFile, // Cambiamos photoUrl (String) por imageFile (File)
+    File? imageFile,
   }) async {
     await _apiClient.simulateDelay();
 
@@ -301,7 +324,6 @@ class DriverAuthService {
     }
 
     try {
-      // USAMOS FormData PARA ENVIAR ARCHIVOS (IGUAL QUE EN LA APP DE USUARIOS)
       FormData formData = FormData.fromMap({
         'name': name,
         'phone': phone,
@@ -313,15 +335,18 @@ class DriverAuthService {
           ),
       });
 
-      // CAMBIO CLAVE: POST a /me/update (la ruta que sí existe en api.php)
       final response = await _apiClient.dio.post('/me/update', data: formData);
 
-      // Sincronizamos con el formato de respuesta de tu backend
       if (response.data['success'] == true ||
           response.data['status'] == 'success') {
-        // Actualizamos el usuario local con lo que devuelve el server
         if (response.data['user'] != null) {
           _currentUser = User.fromMap(response.data['user']);
+
+          // Actualizamos la caché con los nuevos datos
+          await const FlutterSecureStorage().write(
+            key: 'cached_driver',
+            value: jsonEncode(response.data['user']),
+          );
         }
         return true;
       }
@@ -334,13 +359,10 @@ class DriverAuthService {
     }
   }
 
-  // --- MÉTODOS DE DOCUMENTOS ---
-
   Future<void> uploadDocument(String docType, File file) async {
     await _apiClient.simulateDelay();
 
     if (_apiClient.isMockOnly) {
-      debugPrint("MOCK UPLOAD DOC: $docType - ${file.path}");
       return;
     }
 
@@ -372,32 +394,42 @@ class DriverAuthService {
 
     final response = await _apiClient.dio.post('/driver/submit-review');
     _currentUser = User.fromMap(response.data['user']);
+
+    // Actualizamos los datos del usuario en la caché local
+    await const FlutterSecureStorage().write(
+      key: 'cached_driver',
+      value: jsonEncode(response.data['user']),
+    );
+
     return _currentUser!;
   }
 
-  // --- HELPERS ---
   Future<void> _saveSession(User user, String token) async {
-    // USAMOS StorageService para que el token se guarde donde el Socket lo busca
     await sl<StorageService>().saveToken(token);
     _currentUser = user;
+
+    // Guardar en caché local tras loguearse
+    try {
+      await const FlutterSecureStorage().write(
+        key: 'cached_driver',
+        value: jsonEncode(user.toMap()),
+      );
+    } catch (e) {
+      debugPrint("Error guardando sesión de conductor en caché: $e");
+    }
   }
 
   Future<void> logout() async {
     try {
-      // 1. Limpiamos la caja fuerte (Token, Pass y Biometría)
       await sl<StorageService>().deleteAll();
-
-      // 2. Limpiamos datos temporales de SharedPreferences
       await sl<StorageService>().clearCurrentTrip();
-
-      // 3. Limpiamos el usuario en memoria
+      await const FlutterSecureStorage().delete(
+        key: 'cached_driver',
+      ); // Limpiamos la caché física
       _currentUser = null;
-
       debugPrint("Sesión destruida completamente");
     } catch (e) {
       debugPrint("Error al cerrar sesión: $e");
     }
   }
-
-  // --- MOCKS ---
 }

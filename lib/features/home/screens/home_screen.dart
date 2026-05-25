@@ -806,7 +806,7 @@ class _HomeScreenState extends State<HomeScreen>
                         final String fallbackUrl =
                             (trip.fuecUrl != null && trip.fuecUrl!.isNotEmpty)
                             ? trip.fuecUrl!
-                            : "https://api.vamosapp.com.co/api/viajes/${trip.id}/fuec/pdf";
+                            : "https://api.vamosapp.com.co/api/viajes/${trip.id}/fuec/pdf-interno"; // <-- Corregido aquí
                         _openFuec(fallbackUrl, context);
                       },
                       borderRadius: BorderRadius.circular(12),
