@@ -1,3 +1,5 @@
+// lib/features/profile/screens/profile_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -101,19 +103,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _isNameEditable = false;
           _isPhoneEditable = false;
           _isEmailEditable = false;
+          _imageFile = null;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Perfil actualizado"),
-            backgroundColor: AppColors.primaryGreen,
-          ),
-        );
+        _showSnack("Perfil actualizado correctamente");
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
-        );
+        _showSnack("Error: $e", isError: true);
       }
     } finally {
       if (mounted) {
@@ -124,13 +120,513 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          msg,
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        backgroundColor: isError ? Colors.redAccent : AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      ),
+    );
+  }
+
+  // DIÁLOGO SEGURO PARA ACTUALIZAR CONTRASEÑA
+  void _showChangePasswordDialog() {
+    final currentPasswordController = TextEditingController();
+    final newPasswordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    final dialogFormKey = GlobalKey<FormState>();
+
+    bool isCurrentObscured = true;
+    bool isNewObscured = true;
+    bool isConfirmObscured = true;
+    bool isDialogLoading = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Form(
+                key: dialogFormKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.security_rounded,
+                        color: AppColors.primaryGreen,
+                        size: 40,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      "Actualizar Contraseña",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Por seguridad, te enviaremos una notificación de confirmación a tu correo inmediatamente después del cambio.",
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // CONTRASEÑA ACTUAL
+                    _buildDialogPasswordField(
+                      controller: currentPasswordController,
+                      label: "CONTRASEÑA ACTUAL",
+                      isObscured: isCurrentObscured,
+                      onToggleVisibility: () {
+                        setDialogState(
+                          () => isCurrentObscured = !isCurrentObscured,
+                        );
+                      },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'La contraseña actual es requerida';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+
+                    // NUEVA CONTRASEÑA
+                    _buildDialogPasswordField(
+                      controller: newPasswordController,
+                      label: "NUEVA CONTRASEÑA",
+                      isObscured: isNewObscured,
+                      onToggleVisibility: () {
+                        setDialogState(() => isNewObscured = !isNewObscured);
+                      },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'La nueva contraseña es requerida';
+                        }
+                        if (value.length < 6) {
+                          return 'Debe tener al menos 6 caracteres';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+
+                    // CONFIRMAR NUEVA CONTRASEÑA
+                    _buildDialogPasswordField(
+                      controller: confirmPasswordController,
+                      label: "CONFIRMAR NUEVA CONTRASEÑA",
+                      isObscured: isConfirmObscured,
+                      onToggleVisibility: () {
+                        setDialogState(
+                          () => isConfirmObscured = !isConfirmObscured,
+                        );
+                      },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Confirma tu contraseña';
+                        }
+                        if (value != newPasswordController.text) {
+                          return 'Las contraseñas no coinciden';
+                        }
+                        return null;
+                      },
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed: isDialogLoading
+                                ? null
+                                : () => Navigator.pop(ctx),
+                            child: Text(
+                              "CANCELAR",
+                              style: GoogleFonts.montserrat(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white30,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: isDialogLoading
+                                ? null
+                                : () async {
+                                    if (!dialogFormKey.currentState!
+                                        .validate()) {
+                                      return;
+                                    }
+
+                                    setDialogState(
+                                      () => isDialogLoading = true,
+                                    );
+
+                                    try {
+                                      // Llamamos de manera defensiva al método del provider si existe
+                                      await context
+                                          .read<AuthProvider>()
+                                          .changePassword(
+                                            currentPassword:
+                                                currentPasswordController.text,
+                                            newPassword:
+                                                newPasswordController.text,
+                                            confirmPassword:
+                                                confirmPasswordController.text,
+                                          );
+                                      if (context.mounted) {
+                                        Navigator.pop(ctx);
+                                        _showSnack(
+                                          "Contraseña actualizada exitosamente.",
+                                        );
+                                      }
+                                    } catch (e) {
+                                      if (context.mounted) {
+                                        _showSnack(
+                                          e.toString().replaceAll(
+                                            "Exception: ",
+                                            "",
+                                          ),
+                                          isError: true,
+                                        );
+                                      }
+                                    } finally {
+                                      setDialogState(
+                                        () => isDialogLoading = false,
+                                      );
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryGreen,
+                              disabledBackgroundColor: Colors.white10,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: isDialogLoading
+                                ? const SizedBox(
+                                    width: 23,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(
+                                    "GUARDAR",
+                                    style: GoogleFonts.montserrat(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDialogPasswordField({
+    required TextEditingController controller,
+    required String label,
+    required bool isObscured,
+    required VoidCallback onToggleVisibility,
+    required String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.montserrat(
+            color: Colors.white54,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: controller,
+          obscureText: isObscured,
+          validator: validator,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+          decoration: InputDecoration(
+            prefixIcon: const Icon(
+              Icons.lock_outline_rounded,
+              color: Colors.white30,
+              size: 18,
+            ),
+            suffixIcon: IconButton(
+              icon: Icon(
+                isObscured
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_rounded,
+                size: 16,
+                color: Colors.white30,
+              ),
+              onPressed: onToggleVisibility,
+            ),
+            filled: true,
+            fillColor: cardColor,
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 12,
+              horizontal: 12,
+            ),
+            errorStyle: GoogleFonts.montserrat(
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.white10),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(
+                color: AppColors.primaryGreen,
+                width: 1.5,
+              ),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.redAccent, width: 1),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.redAccent, width: 1.5),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // PROTOCOLO DE ELIMINACIÓN DEFINITIVA
+  void _showDeleteAccountDialog() {
+    final confirmController = TextEditingController();
+    bool canDelete = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.report_gmailerrorred_rounded,
+                      color: Colors.redAccent,
+                      size: 40,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    "¿Eliminar cuenta definitivamente?",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                      color: Colors.white,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "Esta acción borrará de forma inmediata y definitiva tu perfil de conductor, tus vehículos asociados, historial de viajes y tus saldos del servidor sin excepción alguna. Esta acción NO se puede deshacer.",
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white54,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    "Escribe la palabra 'ELIMINAR' para confirmar:",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: confirmController,
+                    autofocus: true,
+                    textCapitalization: TextCapitalization.characters,
+                    onChanged: (val) {
+                      setDialogState(() {
+                        canDelete = val.trim() == "ELIMINAR";
+                      });
+                    },
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.redAccent,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: "ELIMINAR",
+                      hintStyle: const TextStyle(color: Colors.white12),
+                      filled: true,
+                      fillColor: darkBg,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.white10),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: Colors.redAccent,
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: Text(
+                            "CANCELAR",
+                            style: GoogleFonts.montserrat(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white30,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: canDelete
+                              ? () async {
+                                  Navigator.pop(ctx);
+                                  await _executeAccountDeletion();
+                                }
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.redAccent,
+                            disabledBackgroundColor: Colors.white10,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            "ELIMINAR",
+                            style: GoogleFonts.montserrat(
+                              fontWeight: FontWeight.bold,
+                              color: canDelete ? Colors.white : Colors.white30,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _executeAccountDeletion() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final success = await context.read<AuthProvider>().deleteUserAccount();
+      if (success && mounted) {
+        _showSnack("Tu cuenta y datos han sido eliminados definitivamente.");
+      } else {
+        _showSnack(
+          "No se pudo procesar la solicitud. Intenta de nuevo.",
+          isError: true,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnack("Error: $e", isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().user;
     if (user == null) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF0B0F19),
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        backgroundColor: darkBg,
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -170,6 +666,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       _isNameEditable = true;
                                     });
                                   },
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'El nombre no puede estar vacío';
+                                    }
+                                    if (value.trim().length < 3) {
+                                      return 'Nombre demasiado corto';
+                                    }
+                                    return null;
+                                  },
                                 ),
                                 _buildInput(
                                   _phoneController,
@@ -183,6 +688,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     });
                                   },
                                   isPhone: true,
+                                  validator: (value) {
+                                    if (value == null || value.isEmpty) {
+                                      return 'El celular es obligatorio';
+                                    }
+                                    if (!RegExp(r'^\d{10}$').hasMatch(value)) {
+                                      return 'Ingresa 10 dígitos válidos';
+                                    }
+                                    return null;
+                                  },
                                 ),
                                 _buildInput(
                                   _emailController,
@@ -195,6 +709,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       _isEmailEditable = true;
                                     });
                                   },
+                                  validator: (value) {
+                                    if (value == null || value.isEmpty) {
+                                      return 'El correo es obligatorio';
+                                    }
+                                    final emailRegex = RegExp(
+                                      r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+                                    );
+                                    if (!emailRegex.hasMatch(value)) {
+                                      return 'Correo electrónico no válido';
+                                    }
+                                    return null;
+                                  },
                                 ),
                               ],
                             ),
@@ -206,12 +732,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 _sectionTitle("CUENTA Y SEGURIDAD"),
                                 const SizedBox(height: 20),
                                 _buildStatusRow(user),
-                                if (_isBioAvailable)
+                                const Divider(
+                                  color: Colors.white10,
+                                  height: 30,
+                                ),
+                                _buildActionTile(
+                                  icon: Icons.lock_outline_rounded,
+                                  title: "Seguridad de la cuenta",
+                                  subtitle: "Cambiar contraseña",
+                                  onTap: _showChangePasswordDialog,
+                                ),
+                                if (_isBioAvailable) ...[
                                   const Divider(
                                     color: Colors.white10,
                                     height: 30,
                                   ),
-                                if (_isBioAvailable)
                                   _buildSettingsTile(
                                     "Acceso Biométrico",
                                     Switch.adaptive(
@@ -225,6 +760,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       },
                                     ),
                                   ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // ZONA DE ELIMINACIÓN SEGURA
+                          _buildGlassContainer(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle("ZONA DE ELIMINACIÓN"),
+                                const SizedBox(height: 15),
+                                Text(
+                                  "La eliminación de la cuenta es permanente e irreversible. Se borrarán todos tus datos de conductor, turnos e historial sin excepción.",
+                                  style: GoogleFonts.montserrat(
+                                    fontSize: 12,
+                                    color: Colors.white54,
+                                    height: 1.4,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 50,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _showDeleteAccountDialog,
+                                    icon: const Icon(
+                                      Icons.delete_forever_rounded,
+                                      color: Colors.redAccent,
+                                    ),
+                                    label: Text(
+                                      "ELIMINAR MI CUENTA",
+                                      style: GoogleFonts.montserrat(
+                                        color: Colors.redAccent,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(
+                                        color: Colors.redAccent,
+                                        width: 1.5,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      backgroundColor: Colors.red.withValues(
+                                        alpha: 0.02,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -250,19 +837,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildAppBar(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
     child: Row(
       children: [
         IconButton(
           onPressed: () => Navigator.pop(context),
-          icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.white,
+            size: 20,
+          ),
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.white.withValues(alpha: 0.1),
+            padding: const EdgeInsets.all(12),
+          ),
         ),
+        const SizedBox(width: 15),
         Text(
           "MI PERFIL",
           style: GoogleFonts.montserrat(
             fontWeight: FontWeight.w800,
             color: Colors.white,
-            letterSpacing: 1,
+            letterSpacing: 1.5,
           ),
         ),
       ],
@@ -273,7 +869,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     child: Stack(
       alignment: Alignment.center,
       children: [
-        // 1. Efecto de resplandor sutil (glow)
         Container(
           width: 125,
           height: 125,
@@ -291,8 +886,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ),
-
-        // 2. Avatar con estado de carga
         CircleAvatar(
           radius: 58,
           backgroundColor: darkBg,
@@ -307,14 +900,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ? const Icon(Icons.camera_alt, color: Colors.white24, size: 40)
               : null,
         ),
-
-        // 3. Botón de edición con estilo Glassmorphism
         Positioned(
           bottom: 0,
           right: 0,
           child: GestureDetector(
-            onTap: () =>
-                _showImagePickerOptions(), // <--- Llama al modal de selección
+            onTap: () => _showImagePickerOptions(),
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -334,7 +924,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ),
   );
 
-  // Modal robusto para elegir origen de imagen
   void _showImagePickerOptions() {
     showModalBottomSheet(
       context: context,
@@ -409,15 +998,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     bool editable,
     VoidCallback onEdit, {
     bool isPhone = false,
+    String? Function(String?)? validator,
   }) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
         label,
         style: GoogleFonts.montserrat(
-          color: Colors.grey,
-          fontSize: 10,
+          color: Colors.white54,
+          fontSize: 9,
           fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
         ),
       ),
       const SizedBox(height: 8),
@@ -425,27 +1016,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
         controller: controller,
         focusNode: focus,
         readOnly: !editable,
-        style: const TextStyle(color: Colors.white),
+        validator: validator,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
         keyboardType: isPhone ? TextInputType.phone : TextInputType.text,
         inputFormatters: isPhone
-            ? [FilteringTextInputFormatter.digitsOnly]
+            ? [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10),
+              ]
             : [],
         decoration: InputDecoration(
           prefixIcon: Icon(
             icon,
             color: editable ? AppColors.primaryGreen : Colors.white30,
+            size: 18,
           ),
           suffixIcon: !editable
               ? IconButton(
-                  icon: const Icon(Icons.edit, size: 18, color: Colors.white30),
+                  icon: const Icon(Icons.edit, size: 16, color: Colors.white30),
                   onPressed: onEdit,
                 )
               : null,
           filled: true,
-          fillColor: cardColor,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(15),
-            borderSide: BorderSide.none,
+          fillColor: editable ? cardColor : cardColor.withValues(alpha: 0.3),
+          contentPadding: const EdgeInsets.symmetric(
+            vertical: 12,
+            horizontal: 12,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.white10),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(
+              color: AppColors.primaryGreen,
+              width: 1.5,
+            ),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.redAccent, width: 1),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.redAccent, width: 1.5),
           ),
         ),
       ),
@@ -455,31 +1074,117 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildStatusRow(User user) => Row(
     children: [
-      Icon(Icons.verified_user, color: AppColors.primaryGreen),
-      const SizedBox(width: 15),
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Estado de cuenta",
-            style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12),
-          ),
-          Text(
-            user.verificationStatus.toString().split('.').last,
-            style: GoogleFonts.poppins(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppColors.primaryGreen.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(
+          Icons.verified_user_rounded,
+          color: AppColors.primaryGreen,
+          size: 20,
+        ),
       ),
+      const SizedBox(width: 15),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "Estado de cuenta",
+              style: GoogleFonts.montserrat(
+                color: Colors.white30,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              user.verificationStatus
+                  .toString()
+                  .split('.')
+                  .last
+                  .replaceAll('_', ' '),
+              style: GoogleFonts.montserrat(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const Icon(Icons.lock_rounded, size: 14, color: Colors.white24),
     ],
   );
+
+  Widget _buildActionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: AppColors.primaryGreen, size: 20),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 10,
+                      color: Colors.white30,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 12,
+              color: Colors.white24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildSettingsTile(String title, Widget trailing) => Row(
     mainAxisAlignment: MainAxisAlignment.spaceBetween,
     children: [
-      Text(title, style: GoogleFonts.poppins(color: Colors.white)),
+      Text(
+        title,
+        style: GoogleFonts.montserrat(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
       trailing,
     ],
   );
@@ -489,7 +1194,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     decoration: BoxDecoration(
       color: cardColor.withValues(alpha: 0.5),
       borderRadius: BorderRadius.circular(25),
-      border: Border.all(color: Colors.white10),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
     ),
     child: child,
   );

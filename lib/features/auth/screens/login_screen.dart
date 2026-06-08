@@ -6,15 +6,14 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/models/user_model.dart';
 import '../services/driver_auth_service.dart';
 
-// Pantallas destino (Asegúrate de que existan o crea stubs)
+// Pantallas destino
 import '../../home/screens/home_screen.dart';
-import 'verification_check_screen.dart'; // Esta funcionará como PendingApproval
-// --- AGREGA ESTOS IMPORTS PARA QUITAR LOS ERRORES ---
+import 'verification_check_screen.dart';
 import '../../../core/di/injection_container.dart';
 import '../../../core/services/biometric_service.dart';
 import '../../../core/services/storage_service.dart';
-import 'splash_screen.dart'; // Asegúrate que la ruta sea correcta según tu carpeta
-import '../../../core/utils/device_helper.dart'; // <--- AGREGA ESTO
+import 'splash_screen.dart';
+import '../../../core/utils/device_helper.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -33,22 +32,19 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _rememberMe = false;
-  bool _isBioAvailable = false; // Para saber si mostrar el switch
-  bool _hasSavedCredentials =
-      false; // Indica si hay una contraseña en el SecureStorage
-  bool _isEmailVerified = false; // Controla si mostramos el paso 2
-  bool _checkingEmail = false; // Loader específico para el paso 1
+  bool _isBioAvailable = false;
+  bool _hasSavedCredentials = false;
+  bool _isEmailVerified = false;
+  bool _checkingEmail = false;
 
   @override
   void initState() {
     super.initState();
     _loadSavedEmail();
-    _checkBioSupport(); // <--- AGREGA ESTA LÍNEA
+    _checkBioSupport();
   }
 
-  // AGREGA ESTE MÉTODO:
   Future<void> _checkBioSupport() async {
-    // Solo verificamos si el hardware existe
     final isAvailable = await sl<BiometricService>().isAvailable();
 
     if (mounted) {
@@ -56,12 +52,9 @@ class _LoginScreenState extends State<LoginScreen> {
         _isBioAvailable = isAvailable;
       });
     }
-    // NOTA: Hemos eliminado la llamada a _loginWithBiometrics() de aquí.
-    // Ahora el sensor SOLO se activará cuando el usuario toque el icono.
   }
 
   Future<void> _loadSavedEmail() async {
-    // Usamos el servicio central para leer el correo recordado
     final savedEmail = await sl<StorageService>().getBiometricEmail();
     if (savedEmail != null && mounted) {
       setState(() {
@@ -80,26 +73,24 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     // PASO 1: VERIFICAR CUENTA EN EL BACKEND
-    // PASO 1: VERIFICAR CUENTA EN EL BACKEND
     if (!_isEmailVerified) {
       setState(() => _checkingEmail = true);
       try {
         final deviceId = await DeviceHelper.getId();
         await _authService.checkAccount(email, deviceId);
 
-        // --- AQUÍ ESTÁ LA MAGIA PARA LA HUELLA ---
         final storage = sl<StorageService>();
-        final savedPass = await storage
-            .getPassword(); // O tu método para obtener el password
+        final savedPass = await storage.getPassword();
         final bioEnabled = await storage.isBiometricEnabled();
 
         setState(() {
           _isEmailVerified = true;
           _checkingEmail = false;
-          // Se habilita la huella solo si hay password guardado y biometría activa
           _hasSavedCredentials = (savedPass != null && bioEnabled == true);
         });
-        _passwordFocusNode.requestFocus();
+
+        // --- SE ELIMINÓ LA SIGUIENTE LÍNEA PARA EVITAR QUE EL TECLADO SE ABRA SOLO ---
+        // _passwordFocusNode.requestFocus();
       } catch (e) {
         setState(() => _checkingEmail = false);
         _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
@@ -126,7 +117,6 @@ class _LoginScreenState extends State<LoginScreen> {
         deviceName,
       );
 
-      // --- PROCESO DE ENROLAMIENTO (GUARDAR EN CELULAR) ---
       final storage = sl<StorageService>();
 
       if (_rememberMe) {
@@ -134,7 +124,6 @@ class _LoginScreenState extends State<LoginScreen> {
         await storage.savePassword(password);
         await storage.setBiometricEnabled(true);
       } else {
-        // Si el usuario desmarca "Recordar", borramos los datos sensibles
         await storage.saveBiometricEmail("");
         await storage.setBiometricEnabled(false);
       }
@@ -177,7 +166,6 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       try {
-        // --- CORRECCIÓN CLAVE: Enviamos ID y Nombre al loguear con huella ---
         final deviceId = await DeviceHelper.getId();
         final deviceName = await DeviceHelper.getName();
 
@@ -203,9 +191,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _navigateBasedOnStatus(User user) {
-    // LÓGICA DE NAVEGACIÓN SOLICITADA
     if (user.verificationStatus == UserVerificationStatus.VERIFIED) {
-      // Si es VERIFIED pero el servicio ya validó que active es true:
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -214,7 +200,6 @@ class _LoginScreenState extends State<LoginScreen> {
     } else if (user.verificationStatus == UserVerificationStatus.PENDING ||
         user.verificationStatus == UserVerificationStatus.UNDER_REVIEW ||
         user.verificationStatus == UserVerificationStatus.DOCS_UPLOADED) {
-      // Redirigir a pantalla de espera
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const VerificationCheckScreen()),
@@ -245,7 +230,6 @@ class _LoginScreenState extends State<LoginScreen> {
       backgroundColor: const Color(0xFF0D121F),
       body: Stack(
         children: [
-          // 1. FONDO RADIAL (Se queda de primero/al fondo)
           Container(
             decoration: const BoxDecoration(
               gradient: RadialGradient(
@@ -255,8 +239,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
-
-          // 2. CONTENIDO CENTRAL (Lo movemos al segundo lugar)
           SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -272,7 +254,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             const Spacer(flex: 2),
-                            // En login_screen.dart
                             Hero(
                               tag: 'logo',
                               createRectTween: (begin, end) {
@@ -284,7 +265,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: Image.asset(
                                 'assets/images/logo.png',
                                 height: 120,
-                              ), // Altura más pequeña para el login
+                              ),
                             ),
                             const SizedBox(height: 40),
                             Text(
@@ -321,13 +302,10 @@ class _LoginScreenState extends State<LoginScreen> {
               },
             ),
           ),
-
-          // 3. BOTÓN ATRÁS (Lo movemos al final para que esté ENCIMA de todo)
           Positioned(
             top: 50,
             left: 20,
             child: SafeArea(
-              // El SafeArea interno ayuda con el notch
               child: IconButton(
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(
@@ -347,7 +325,6 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
-  // --- MÉTODOS DE APOYO PARA MANTENER EL BUILD LIMPIO ---
 
   Widget _buildLoginForm() {
     return ClipRRect(
@@ -363,7 +340,6 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           child: Column(
             children: [
-              // 1. CAMPO DE EMAIL (Siempre visible)
               _buildDarkInput(
                 controller: _emailController,
                 label: "Correo Electrónico",
@@ -388,11 +364,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     : null,
               ),
 
-              // PASO 2: APARECE SOLO SI EL EMAIL ES VÁLIDO (Password + Olvido)
               if (_isEmailVerified) ...[
                 const SizedBox(height: 15),
-
-                // SALUDO ELIMINADO AQUÍ
                 _buildDarkInput(
                   controller: _passwordController,
                   label: "Contraseña",
@@ -403,8 +376,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   onToggle: () =>
                       setState(() => _obscurePassword = !_obscurePassword),
                 ),
-
-                // Link Olvido de contraseña
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
@@ -443,7 +414,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ],
 
-              // PASO 1: APARECE SOLO ANTES DE VALIDAR EMAIL (Recordar + Registro)
               if (!_isEmailVerified) ...[
                 const SizedBox(height: 15),
                 Row(
@@ -465,15 +435,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 10),
                 const Divider(height: 1, color: Colors.white12),
                 const SizedBox(height: 10),
-
-                // LINK DE REGISTRO PARA CONDUCTORES
                 TextButton(
                   onPressed: () {
-                    // Navegación directa al registro de conductores
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -513,7 +479,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildLoginButton() {
     return Row(
       children: [
-        // BOTÓN PRINCIPAL
         Expanded(
           child: Container(
             height: 62,
@@ -550,13 +515,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ),
-
-        // ICONO DE HUELLA (ACCESO RÁPIDO)
-        // ICONO DE HUELLA (DINÁMICO)
-        // Solo aparece si:
-        // 1. El email ya fue verificado
-        // 2. El celular tiene sensor (_isBioAvailable)
-        // 3. Ya se ha logueado antes en este equipo (_hasSavedCredentials)
         if (_isEmailVerified && _isBioAvailable && _hasSavedCredentials) ...[
           const SizedBox(width: 15),
           GestureDetector(
@@ -583,7 +541,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  // --- AGREGAR ESTE MÉTODO AL FINAL ---
   Widget _buildLegalNote() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -619,7 +576,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  // ------------------------------------
   Widget _buildDarkInput({
     required TextEditingController controller,
     required String label,
@@ -629,8 +585,8 @@ class _LoginScreenState extends State<LoginScreen> {
     VoidCallback? onToggle,
     TextInputType? keyboardType,
     FocusNode? focusNode,
-    bool readOnly = false, // <--- AGREGADO
-    Widget? suffixIcon, // <--- AGREGADO
+    bool readOnly = false,
+    Widget? suffixIcon,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -649,13 +605,10 @@ class _LoginScreenState extends State<LoginScreen> {
           obscureText: obscure,
           focusNode: focusNode,
           keyboardType: keyboardType,
-          readOnly: readOnly, // <--- ASIGNADO AQUÍ
+          readOnly: readOnly,
           style: GoogleFonts.montserrat(color: Colors.white),
           decoration: InputDecoration(
             prefixIcon: Icon(icon, color: AppColors.primaryGreen, size: 20),
-            // LÓGICA DE ICONO DINÁMICO:
-            // Si es password, usa el botón de ver/ocultar.
-            // Si no, usa el suffixIcon que pasemos (como el de "Editar correo").
             suffixIcon: isPassword
                 ? IconButton(
                     icon: Icon(
@@ -664,7 +617,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     onPressed: onToggle,
                   )
-                : suffixIcon, // <--- ASIGNADO AQUÍ
+                : suffixIcon,
             filled: true,
             fillColor: Colors.white.withValues(alpha: 0.05),
             contentPadding: const EdgeInsets.symmetric(

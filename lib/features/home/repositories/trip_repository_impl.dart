@@ -351,12 +351,21 @@ class ApiTripRepository implements TripRepository {
   }
 
   @override
-  Future<void> updateLocation(String tripId, double lat, double lng) async =>
-      await _api.dio.post(
-        '/viajes/$tripId/tracking',
-        data: {'lat': lat, 'lng': lng},
-      );
-
+  Future<void> updateLocation(
+    String tripId,
+    double lat,
+    double lng, {
+    double? speed,
+    double? bearing,
+  }) async => await _api.dio.post(
+    '/viajes/$tripId/tracking',
+    data: {
+      'lat': lat,
+      'lng': lng,
+      if (speed != null) 'velocidad': speed,
+      if (bearing != null) 'bearing': bearing,
+    },
+  );
   @override
   Future<Trip> confirmCashPayment(String tripId, PaymentMethod method) async {
     String backendMethod = 'EFECTIVO';

@@ -121,6 +121,8 @@ class TripRequestSheet extends StatelessWidget {
 
           // Precios
           // Detalles del Viaje - REEMPLAZA ESTE BLOQUE EXACTO
+          // Precios
+          // Detalles del Viaje
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -141,11 +143,47 @@ class TripRequestSheet extends StatelessWidget {
                     _priceColumn("Total Viaje", _formatCurrency(trip.price)),
                   ],
                 ),
+
+                // 🟢 INSIGNIA TRANSPARENTE DE SUBSIDIO VAMOS APP
+                if (trip.hasDiscount) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      // ignore: deprecated_member_use
+                      color: AppColors.primaryGreen.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.stars_rounded,
+                          size: 14,
+                          color: AppColors.primaryGreen,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          "CON SUBSIDIO: PASAJERO PAGARÁ \$ ${_formatCurrency(trip.passengerCashToPay)}",
+                          style: GoogleFonts.montserrat(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primaryGreen,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 15),
                   child: Divider(color: Colors.white10),
                 ),
-                // AQUÍ SE MUESTRAN LOS DATOS REALES
                 _infoRow(
                   "Distancia Total:",
                   "${trip.distanceKm.toStringAsFixed(1)} km",

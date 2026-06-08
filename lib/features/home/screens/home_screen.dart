@@ -17,6 +17,8 @@ import '../widgets/side_menu.dart';
 import 'dart:math' as math;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../core/utils/cached_tile_provider.dart';
+import 'dart:io'; // <--- Permite usar el tipo 'File' para la foto tomada
+import 'package:image_picker/image_picker.dart'; // <--- Permite abrir la cámara nativa del teléfono
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen>
   final MapController _mapController = MapController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isMapReady = false;
+  final TextEditingController _pinController = TextEditingController();
 
   final String myMapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
   late HomeProvider _homeProvider;
@@ -293,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen>
     _mapMoveController?.dispose();
     _markerAnimationController?.dispose();
     _passengerAnimationController?.dispose(); // LIBERACIÓN
-
+    _pinController.dispose();
     super.dispose();
   }
 
@@ -673,6 +676,173 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  // 🟢 AGREGAR ESTE MÉTODO AQUÍ ADENTRO DE _HomeScreenState:
+  void _confirmCancel(BuildContext context, HomeProvider provider) {
+    final trip = provider.activeTrip;
+    if (trip == null) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: const Color(0xFF1F2937),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.redAccent,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                "¿Cancelar servicio?",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                "Si cancelas este viaje activo que ya se encuentra EN CURSO, se aplicará la penalización correspondiente configurada en el sistema.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  color: Colors.grey[400],
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text(
+                        "VOLVER",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.grey[400],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        provider.cancelCurrentTrip(context);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          "SÍ, CANCELAR",
+                          maxLines: 1,
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Abre el selector de imagen según el origen (Cámara o Galería)
+  Future<File?> _pickImage(ImageSource source) async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: source,
+        imageQuality: 50, // Comprime al 50% para ahorrar datos móviles
+      );
+      if (photo != null) {
+        return File(photo.path);
+      }
+    } catch (e) {
+      debugPrint("Error al seleccionar imagen: $e");
+    }
+    return null;
+  }
+
+  /// Muestra un diálogo elegante para elegir entre Galería (screenshots) o Cámara
+  Future<File?> _showImageSourceDialog(BuildContext context) async {
+    return showDialog<File?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1F2937),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          "Seleccionar Comprobante",
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(
+                Icons.photo_library_rounded,
+                color: AppColors.primaryGreen,
+              ),
+              title: const Text(
+                "Galería (Capturas de pantalla)",
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () async {
+                final file = await _pickImage(
+                  ImageSource.gallery,
+                ); // 🟢 Permite subir capturas
+                if (ctx.mounted) Navigator.pop(ctx, file);
+              },
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.camera_alt_rounded,
+                color: AppColors.primaryGreen,
+              ),
+              title: const Text(
+                "Cámara",
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () async {
+                final file = await _pickImage(ImageSource.camera);
+                if (ctx.mounted) Navigator.pop(ctx, file);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // --- INTERFAZ COMPLETA PARA EL CONDUCTOR (VIAJE EN CURSO) ---
   Widget _buildFullScreenDriverTripView(
     BuildContext context,
@@ -683,14 +853,32 @@ class _HomeScreenState extends State<HomeScreen>
 
     return Container(
       color: AppColors.darkBlue,
-      // Fondo Dark Slate Premium (Cero consumo de Mapbox tiles)
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // CABECERA: Viaje en Curso + Botón FUEC (Bien ubicado y alineado)
+              // ===============================================================
+              // BANNERS DE ALERTA EN PANTALLA COMPLETA
+              // ===============================================================
+              if (provider.isNetworkDisconnected ||
+                  provider.isGpsSignalLost) ...[
+                if (provider.isNetworkDisconnected)
+                  _buildStatusBanner(
+                    icon: Icons.cloud_off_rounded,
+                    message:
+                        "Sin conexión a internet. Intentando reconectar...",
+                    backgroundColor: Colors.redAccent,
+                  ),
+                if (provider.isGpsSignalLost && !provider.isNetworkDisconnected)
+                  _buildStatusBanner(
+                    icon: Icons.gps_off_rounded,
+                    message: "Señal de GPS débil o inestable.",
+                    backgroundColor: Colors.orangeAccent,
+                  ),
+                const SizedBox(height: 12),
+              ],
 
               // ÁREA CENTRAL REDISEÑADA CON LOGO Y ESTADO DE CONEXIÓN (Sin distancias ni tiempos estimados)
               Expanded(
@@ -1048,6 +1236,38 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ],
                   ),
+
+                  // 🟢 NUEVO: BOTÓN DE CANCELACIÓN EN VISTA DE VIAJE EMPEZADO (STARTED)
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 52,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _confirmCancel(context, provider),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.redAccent,
+                      ),
+                      label: Text(
+                        "CANCELAR VIAJE",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(
+                          color: Colors.redAccent,
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        backgroundColor: Colors.red.withValues(alpha: 0.02),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -1156,6 +1376,23 @@ class _HomeScreenState extends State<HomeScreen>
   );
 
   Widget _buildOnlineStatusIndicator(HomeProvider provider) {
+    Color indicatorColor;
+    String statusText;
+
+    switch (provider.turnoEstado) {
+      case 'ACTIVO':
+        indicatorColor = AppColors.primaryGreen; // Verde para activo
+        statusText = "EN LÍNEA";
+        break;
+      case 'BREAK':
+        indicatorColor = Colors.orangeAccent; // Naranja para descanso
+        statusText = "EN BREAK";
+        break;
+      default:
+        indicatorColor = Colors.redAccent; // Rojo para desconectado
+        statusText = "DESCONECTADO";
+    }
+
     return SafeArea(
       child: Align(
         alignment: Alignment.topCenter,
@@ -1174,15 +1411,13 @@ class _HomeScreenState extends State<HomeScreen>
                 width: 10,
                 height: 10,
                 decoration: BoxDecoration(
-                  color: provider.isOnline
-                      ? AppColors.primaryGreen
-                      : Colors.redAccent,
+                  color: indicatorColor,
                   shape: BoxShape.circle,
                 ),
               ),
               const SizedBox(width: 12),
               Text(
-                provider.isOnline ? "EN LÍNEA" : "DESCONECTADO",
+                statusText,
                 style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.w800,
                   fontSize: 12,
@@ -1207,9 +1442,29 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     if (provider.activeTrip != null) {
+      final String statusStr = provider.activeTrip!.status.toString();
+
+      // 🟢 FASE 1: Viaje programado en espera (Mostrar tarjeta de inicio de ruta)
+      if (statusStr.contains('SCHEDULED_ASSIGNED')) {
+        return _buildScheduledAssignedSheet(context, provider);
+      }
+
+      // 🟢 FASE 3: Conductor llegó al sitio (Diferencia entre Programado y Rápido)
+      if (statusStr.contains('ARRIVED')) {
+        if (provider.isActiveTripScheduled) {
+          // Si el viaje es programado, exigimos el PIN de seguridad
+          return _buildPinActivationSheet(context, provider);
+        } else {
+          // Si es un viaje rápido, mostramos la hoja de control regular para iniciar ruta
+          return const TripPanelSheet();
+        }
+      }
+
+      // FASES ACCEPTED (En camino al origen) y DROPPED_OFF (Esperando confirmación de pago)
       return const TripPanelSheet();
     }
 
+    // --- PANEL DE CONTROL DE TURNOS EN TIEMPO REAL (SIN VIAJE ACTIVO) ---
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(25, 25, 25, 35),
@@ -1221,21 +1476,543 @@ class _HomeScreenState extends State<HomeScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!provider.isOnline) _VehicleSelector(provider: provider),
+          // 1. Selector de vehículo: Solo se muestra si está OFFLINE
+          if (provider.turnoEstado == 'OFFLINE') ...[
+            _VehicleSelector(provider: provider),
+            const SizedBox(height: 12),
+          ],
+
+          // 2. ESTADO: OFFLINE (El conductor debe iniciar el turno)
+          if (provider.turnoEstado == 'OFFLINE') ...[
+            SizedBox(
+              width: double.infinity,
+              height: 65,
+              child: ElevatedButton(
+                onPressed: provider.isLoading
+                    ? null
+                    : () {
+                        _showShiftFormModal(
+                          context: context,
+                          provider: provider,
+                          isStarting:
+                              true, // Iniciar turno con kilometraje y foto
+                        );
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                ),
+                child: provider.isLoading
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : Text(
+                        "CONECTARSE AHORA",
+                        style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+
+          // 3. ESTADO: ACTIVO (El conductor está en línea recibiendo ofertas)
+          if (provider.turnoEstado == 'ACTIVO') ...[
+            Row(
+              children: [
+                // Botón de Break de 15 min
+                Expanded(
+                  child: SizedBox(
+                    height: 55,
+                    child: OutlinedButton.icon(
+                      onPressed: provider.isLoading
+                          ? null
+                          : () => provider.iniciarBreak(),
+                      icon: const Icon(
+                        Icons.coffee_rounded,
+                        color: Colors.orangeAccent,
+                      ),
+                      label: Text(
+                        "BREAK",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.orangeAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(
+                          color: Colors.orangeAccent,
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // 🟢 MEJORA: El botón de Almuerzo de 1 Hora desaparece si ya fue utilizado
+                if (!provider.alreadyHadLunch) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SizedBox(
+                      height: 55,
+                      child: OutlinedButton.icon(
+                        onPressed: provider.isLoading
+                            ? null
+                            : () async {
+                                final err = await provider.iniciarAlmuerzo();
+                                if (err != null && context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text("❌ $err"),
+                                      backgroundColor: Colors.redAccent,
+                                    ),
+                                  );
+                                }
+                              },
+                        icon: const Icon(
+                          Icons.restaurant,
+                          color: Colors.blueAccent,
+                        ),
+                        label: Text(
+                          "ALMUERZO",
+                          style: GoogleFonts.montserrat(
+                            color: Colors.blueAccent,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(
+                            color: Colors.blueAccent,
+                            width: 1.5,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 8),
+                // Botón para Terminar Turno (Cerrar)
+                Expanded(
+                  child: SizedBox(
+                    height: 55,
+                    child: ElevatedButton(
+                      onPressed: provider.isLoading
+                          ? null
+                          : () {
+                              _showShiftFormModal(
+                                context: context,
+                                provider: provider,
+                                isStarting: false,
+                              );
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: Text(
+                        "CERRAR",
+                        style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+
+          // 🟢 MEJORA ESTADO ALMUERZO: Solo se muestra el botón ancho para Volver al Turno
+          if (provider.turnoEstado == 'ALMUERZO') ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.blue.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.blueAccent.withValues(alpha: 0.25),
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.restaurant,
+                    color: Colors.blueAccent,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Fin de almuerzo en: ",
+                    style: GoogleFonts.poppins(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    provider.lunchTimerFormated,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.blueAccent,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: ElevatedButton(
+                onPressed: provider.isLoading
+                    ? null
+                    : () => provider.reanudarTurnoCompleto(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: Text(
+                  "VOLVER AL TURNO (REANUDAR)",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+
+          // 🟢 MEJORA ESTADO BREAK: Solo se muestra el botón ancho para Volver al Turno
+          if (provider.turnoEstado == 'BREAK') ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.orangeAccent.withValues(alpha: 0.25),
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.hourglass_bottom_rounded,
+                    color: Colors.orangeAccent,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Fin de break en: ",
+                    style: GoogleFonts.poppins(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    provider.breakTimerFormated,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.orangeAccent,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: ElevatedButton(
+                onPressed: provider.isLoading
+                    ? null
+                    : () async {
+                        final error = await provider.reanudarTurnoCompleto();
+                        if (error != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text("❌ $error"),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: Text(
+                  "VOLVER AL TURNO (REANUDAR)",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // 🟢 NUEVO: Tarjeta que se le muestra al conductor cuando tiene un viaje programado asignado en espera
+  Widget _buildScheduledAssignedSheet(
+    BuildContext context,
+    HomeProvider provider,
+  ) {
+    final trip = provider.activeTrip!;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(25, 25, 25, 35),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B2E).withValues(alpha: 0.95),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(35)),
+        border: Border.all(color: Colors.white),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.white12,
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                "VIAJE PROGRAMADO ASIGNADO",
+                style: GoogleFonts.montserrat(
+                  color: AppColors.primaryGreen,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Icon(
+                Icons.event_available,
+                color: Colors.white70,
+                size: 18,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          Text(
+            trip.passengerName,
+            style: GoogleFonts.montserrat(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          _buildAddressesTimelineView(trip),
+          const SizedBox(height: 25),
 
           SizedBox(
-            width: double.infinity,
-            height: 65,
+            height: 56,
             child: ElevatedButton(
               onPressed: provider.isLoading
                   ? null
-                  : () => provider.toggleOnlineStatus(),
+                  : () => provider.iniciarRutaAlOrigen(),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryGreen,
               ),
-              child: Text(
-                provider.isOnline ? "TERMINAR TURNO" : "CONECTARSE AHORA",
+              child: provider.isLoading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : Text(
+                      "IR AL ENCUENTRO (INICIAR RUTA)",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🟢 NUEVO: Panel premium para que el conductor ingrese el PIN que le dicte el pasajero
+  Widget _buildPinActivationSheet(BuildContext context, HomeProvider provider) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        25,
+        20,
+        25,
+        MediaQuery.of(context).viewInsets.bottom + 30,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(
+          0xFF161B2E,
+        ).withValues(alpha: 0.95), // Fondo oscuro a juego con tu UI
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(35)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Indicador de arrastre
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+
+          Text(
+            "ACTIVACIÓN DE VIAJE",
+            style: GoogleFonts.montserrat(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          Text(
+            "Solicita al pasajero el PIN de inicio de 6 dígitos que llegó a su correo o app para poner en marcha el servicio.",
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              color: Colors.grey[400],
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // CAMPO DE TEXTO PARA EL PIN
+          TextField(
+            controller: _pinController,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 8,
+            ),
+            decoration: InputDecoration(
+              counterText: "",
+              hintText: "000000",
+              hintStyle: TextStyle(color: Colors.white24, letterSpacing: 8),
+              filled: true,
+              fillColor: const Color(0xFF0B0F19),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: const BorderSide(color: Colors.white12),
               ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: const BorderSide(
+                  color: AppColors.primaryGreen,
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // BOTÓN DE VERIFICACIÓN
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: provider.isLoading
+                  ? null
+                  : () async {
+                      final pin = _pinController.text.trim();
+                      if (pin.length != 6) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("⚠️ El PIN debe ser de 6 dígitos"),
+                          ),
+                        );
+                        return;
+                      }
+
+                      try {
+                        bool exito = await provider.activarViajeProgramado(pin);
+                        if (exito && context.mounted) {
+                          _pinController.clear();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                "🟢 ¡Viaje activado! Iniciando ruta de recogida...",
+                              ),
+                              backgroundColor: AppColors.primaryGreen,
+                            ),
+                          );
+                        } else if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("❌ PIN incorrecto o expirado."),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.toString().replaceAll("Exception: ", ""),
+                              ),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryGreen,
+              ),
+              child: provider.isLoading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : Text(
+                      "VERIFICAR Y ACTIVAR",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ),
         ],
@@ -1412,7 +2189,31 @@ class _HomeScreenState extends State<HomeScreen>
               if (trip == null && incoming == null) _buildMenuButton(),
               if (trip == null && incoming == null)
                 _buildOnlineStatusIndicator(provider),
-
+              if (provider.isNetworkDisconnected || provider.isGpsSignalLost)
+                Positioned(
+                  top: 90, // Posicionado justo debajo del indicador de estado
+                  left: 20,
+                  right: 20,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (provider.isNetworkDisconnected)
+                        _buildStatusBanner(
+                          icon: Icons.cloud_off_rounded,
+                          message:
+                              "Sin conexión a internet. Intentando reconectar...",
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      if (provider.isGpsSignalLost &&
+                          !provider.isNetworkDisconnected)
+                        _buildStatusBanner(
+                          icon: Icons.gps_off_rounded,
+                          message: "Señal de GPS débil o inestable.",
+                          backgroundColor: Colors.orangeAccent,
+                        ),
+                    ],
+                  ),
+                ),
               Positioned(
                 bottom: 0,
                 left: 0,
@@ -1447,6 +2248,592 @@ class _HomeScreenState extends State<HomeScreen>
           );
         },
       ),
+    );
+  }
+
+  /// Abre la cámara del dispositivo para capturar la foto del tablero
+  Future<File?> _takeDashboardPhoto() async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 50, // Comprime al 50% de calidad para ahorrar internet
+      );
+      if (photo != null) {
+        return File(photo.path);
+      }
+    } catch (e) {
+      debugPrint("Error al abrir la cámara: $e");
+    }
+    return null;
+  }
+
+  Widget _buildStatusBanner({
+    required IconData icon,
+    required String message,
+    required Color backgroundColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: backgroundColor.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: GoogleFonts.montserrat(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Abre el modal interactivo para ingresar el kilometraje, capturar la foto del tablero y comprobantes de pago/gasto opcionales
+  /// Abre el modal interactivo para ingresar el kilometraje, capturar la foto del tablero y comprobantes de pago/gasto opcionales
+  void _showShiftFormModal({
+    required BuildContext context,
+    required HomeProvider provider,
+    required bool
+    isStarting, // true para Iniciar Turno, false para Terminar Turno
+  }) {
+    final TextEditingController mileageController = TextEditingController();
+    File? selectedPhoto;
+
+    // LISTAS LOCALES PARA ALMACENAR COMPROBANTES Y VALORES (OPCIONALES AL CERRAR)
+    final List<File> comprobantesCargados = [];
+    final List<double> comprobantesValores = [];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled:
+          true, // Permite que el modal suba cuando se abre el teclado
+      backgroundColor: const Color(0xFF161B2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                20,
+                24,
+                MediaQuery.of(context).viewInsets.bottom +
+                    30, // Margen de seguridad para el teclado
+              ),
+              child: SingleChildScrollView(
+                // Permite scroll cómodo si la lista de comprobantes crece
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: Colors.white12,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      isStarting ? "INICIAR TURNO" : "TERMINAR TURNO",
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      isStarting
+                          ? "Ingresa el kilometraje inicial de tu vehículo y toma una foto nítida del tablero (nivel de gasolina)."
+                          : "Ingresa el kilometraje final, toma la foto final del tablero y adjunta comprobantes si es necesario.",
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                        color: Colors.grey[400],
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // 1. Campo de texto para ingresar Kilometraje
+                    TextField(
+                      controller: mileageController,
+                      keyboardType: TextInputType.number,
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: "Kilometraje del vehículo",
+                        labelStyle: GoogleFonts.poppins(
+                          color: Colors.grey[400],
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFF0B0F19),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(15),
+                          borderSide: const BorderSide(color: Colors.white12),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(15),
+                          borderSide: const BorderSide(
+                            color: AppColors.primaryGreen,
+                            width: 2,
+                          ),
+                        ),
+                        prefixIcon: const Icon(
+                          Icons.speed,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // 2. Tarjeta Interactiva para Tomar la Foto del Tablero (OBLIGATORIA)
+                    InkWell(
+                      onTap: () async {
+                        final File? photo = await _takeDashboardPhoto();
+                        if (photo != null) {
+                          setModalState(() {
+                            selectedPhoto = photo;
+                          });
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(15),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 20,
+                          horizontal: 16,
+                        ),
+                        decoration: BoxDecoration(
+                          color: selectedPhoto != null
+                              ? AppColors.primaryGreen.withValues(alpha: 0.1)
+                              : const Color(0xFF0B0F19),
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(
+                            color: selectedPhoto != null
+                                ? AppColors.primaryGreen
+                                : Colors.white10,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              selectedPhoto != null
+                                  ? Icons.check_circle_rounded
+                                  : Icons.camera_alt_rounded,
+                              color: selectedPhoto != null
+                                  ? AppColors.primaryGreen
+                                  : Colors.grey[400],
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                selectedPhoto != null
+                                    ? "¡Foto del tablero capturada con éxito!"
+                                    : "Tomar foto del tablero",
+                                style: GoogleFonts.poppins(
+                                  color: selectedPhoto != null
+                                      ? AppColors.primaryGreen
+                                      : Colors.grey[400],
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // 🟢 3. SECCIÓN RE-DISEÑADA DE COMPROBANTES DE FACTURAS (SOLO AL TERMINAR TURNO)
+                    // 🟢 CORREGIDO: Envolver en un bloque seguro para evitar desbordamientos en pantallas pequeñas o fuentes escaladas
+                    if (!isStarting) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            // 🟢 SOLUCIÓN AL OVERFLOW: Obliga al texto a ajustarse al espacio disponible
+                            child: Text(
+                              "COMPROBANTES Y FACTURAS (OPCIONAL)",
+                              style: GoogleFonts.montserrat(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white70,
+                                letterSpacing: 1.1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow
+                                  .ellipsis, // Si no cabe, añade puntos suspensivos (...)
+                            ),
+                          ),
+                          if (comprobantesCargados.isNotEmpty) ...[
+                            const SizedBox(
+                              width: 8,
+                            ), // Separador mínimo de seguridad
+                            Text(
+                              "${comprobantesCargados.length} adjuntado(s)",
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: AppColors.primaryGreen,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Botón premium para cargar facturas
+                      InkWell(
+                        onTap: () async {
+                          final File? ticketFile = await _showImageSourceDialog(
+                            context,
+                          );
+                          if (ticketFile != null && context.mounted) {
+                            final double?
+                            valorFactura = await showDialog<double>(
+                              context: context,
+                              builder: (dialogCtx) {
+                                final TextEditingController textController =
+                                    TextEditingController();
+                                return dialogCtx.mounted
+                                    ? AlertDialog(
+                                        backgroundColor: const Color(
+                                          0xFF1F2937,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                        title: Text(
+                                          "Valor de la Factura",
+                                          style: GoogleFonts.montserrat(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        content: TextField(
+                                          controller: textController,
+                                          keyboardType: TextInputType.number,
+                                          autofocus: true,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                          ),
+                                          decoration: const InputDecoration(
+                                            labelText:
+                                                "Monto de la Factura (\$)",
+                                            labelStyle: TextStyle(
+                                              color: Colors.white70,
+                                            ),
+                                            enabledBorder: UnderlineInputBorder(
+                                              borderSide: BorderSide(
+                                                color: Colors.white30,
+                                              ),
+                                            ),
+                                            focusedBorder: UnderlineInputBorder(
+                                              borderSide: BorderSide(
+                                                color: AppColors.primaryGreen,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dialogCtx, null),
+                                            child: const Text(
+                                              "CANCELAR",
+                                              style: TextStyle(
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () {
+                                              final val =
+                                                  double.tryParse(
+                                                    textController.text.trim(),
+                                                  ) ??
+                                                  0.0;
+                                              Navigator.pop(dialogCtx, val);
+                                            },
+                                            child: const Text(
+                                              "GUARDAR",
+                                              style: TextStyle(
+                                                color: AppColors.primaryGreen,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : const SizedBox.shrink();
+                              },
+                            );
+
+                            if (valorFactura != null) {
+                              setModalState(() {
+                                comprobantesCargados.add(ticketFile);
+                                comprobantesValores.add(valorFactura);
+                              });
+                            }
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(15),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 16,
+                            horizontal: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0B0F19),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.05),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.cloud_upload_rounded,
+                                color: AppColors.primaryGreen,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                "Adjuntar Factura",
+                                style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // 🟢 VISTA PREVIA PREMIUM DE COMPROBANTES CARGADOS (CON IMAGEN REAL, VALOR Y BOTÓN CERRAR)
+                      if (comprobantesCargados.isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          height:
+                              100, // Alto ideal para visualizar miniaturas verticales
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            itemCount: comprobantesCargados.length,
+                            itemBuilder: (ctx, i) {
+                              return Stack(
+                                children: [
+                                  // Miniatura física de la foto cargada (screenshots)
+                                  Container(
+                                    width: 80,
+                                    height: 80,
+                                    margin: const EdgeInsets.only(
+                                      right: 12,
+                                      top: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: AppColors.primaryGreen
+                                            .withValues(alpha: 0.4),
+                                        width: 1.5,
+                                      ),
+                                      image: DecorationImage(
+                                        image: FileImage(
+                                          comprobantesCargados[i],
+                                        ),
+                                        fit: BoxFit.cover,
+                                      ),
+                                    ),
+                                  ),
+                                  // Etiqueta flotante semitransparente con el monto
+                                  Positioned(
+                                    bottom: 14,
+                                    left: 4,
+                                    right: 16,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.75,
+                                        ),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        "\$${comprobantesValores[i].toStringAsFixed(0)}",
+                                        textAlign: TextAlign.center,
+                                        style: GoogleFonts.montserrat(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 9,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  // Botón circular rojo flotante para remover comprobante
+                                  Positioned(
+                                    right: 4,
+                                    top: 2,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        setModalState(() {
+                                          comprobantesCargados.removeAt(i);
+                                          comprobantesValores.removeAt(i);
+                                        });
+                                      },
+                                      child: Container(
+                                        decoration: const BoxDecoration(
+                                          color: Colors.redAccent,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        padding: const EdgeInsets.all(4),
+                                        child: const Icon(
+                                          Icons.close_rounded,
+                                          color: Colors.white,
+                                          size: 10,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+
+                    const SizedBox(height: 18),
+
+                    // 4. Botón de confirmación y envío de datos
+                    SizedBox(
+                      height: 56,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                        ),
+                        onPressed: () async {
+                          final String mileageStr = mileageController.text
+                              .trim();
+                          if (mileageStr.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  "⚠️ Debes ingresar el kilometraje.",
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          if (selectedPhoto == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  "⚠️ Debes tomar la foto del tablero.",
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+
+                          final int mileage = int.parse(
+                            mileageController.text.trim(),
+                          );
+
+                          // Cerramos el modal primero para que no obstruya la vista
+                          Navigator.pop(ctx);
+
+                          String? error;
+                          if (isStarting) {
+                            error = await provider.iniciarTurnoCompleto(
+                              kilometraje: mileage,
+                              foto: selectedPhoto!,
+                            );
+                          } else {
+                            // ENVIAR COMPROBANTES Y SUS VALORES AL FINALIZAR EL TURNO
+                            error = await provider.terminarTurnoCompleto(
+                              kilometraje: mileage,
+                              foto: selectedPhoto!,
+                              comprobantesFotos: comprobantesCargados,
+                              comprobantesValores: comprobantesValores,
+                            );
+                          }
+
+                          if (error != null && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("❌ $error"),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                          } else if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  isStarting
+                                      ? "🟢 ¡Turno iniciado con éxito!"
+                                      : "🔴 ¡Turno finalizado con éxito!",
+                                ),
+                                backgroundColor: AppColors.primaryGreen,
+                              ),
+                            );
+                          }
+                        },
+                        child: Text(
+                          isStarting
+                              ? "CONFIRMAR E INICIAR"
+                              : "CONFIRMAR Y FINALIZAR",
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

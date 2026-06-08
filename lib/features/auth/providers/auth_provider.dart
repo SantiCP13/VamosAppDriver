@@ -1,4 +1,4 @@
-// auth_provider.dart
+// lib/features/auth/providers/auth_provider.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../core/models/user_model.dart';
@@ -27,18 +27,30 @@ class AuthProvider extends ChangeNotifier {
     final token = await storage.getToken();
     if (token == null || token.isEmpty) return false;
 
-    // 2. Verificación silenciosa (resiliente a fallos de conexión):
+    // 2. Verificación silenciosa:
     try {
       final status = await _authService.verifySessionAndGetStatus();
       if (status != null) {
         notifyListeners();
-        return true; // Acceso directo al Home de forma estable
+        return true; // Acceso exitoso (ya sea online o mediante caché)
+      } else {
+        // Si el estado regresó null, analizamos si el token fue destruido localmente.
+        // Esto pasa si el servidor respondió con un 401/403 explícito.
+        final tokenAft = await storage.getToken();
+        if (tokenAft == null || tokenAft.isEmpty) {
+          return false; // El token ya no existe, forzar login.
+        }
+
+        // Si el token aún sigue en el storage seguro, significa que no fue invalidado
+        // por credenciales erróneas (fue un fallo de red o lectura de caché transitoria).
+        // En este caso, por resiliencia de la app de conducción, mantenemos al usuario logueado en Home.
+        return true;
       }
     } catch (e) {
-      debugPrint("Fallo al validar estado silencioso de sesión: $e");
+      debugPrint("Excepción no controlada al validar sesión: $e");
+      // Si hay una excepción imprevista pero el token existe, no lo deslogueamos.
+      return true;
     }
-
-    return false;
   }
 
   void refreshUser() {
@@ -68,5 +80,27 @@ class AuthProvider extends ChangeNotifier {
     } else {
       throw Exception("No se pudo actualizar el perfil");
     }
+  }
+
+  // 🟢 NUEVO MÉTODO: Delegación del cambio de contraseña
+  Future<Map<String, dynamic>> changePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    return await _authService.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+      confirmPassword: confirmPassword,
+    );
+  }
+
+  // 🟢 NUEVO MÉTODO: Delegación de la eliminación definitiva
+  Future<bool> deleteUserAccount() async {
+    final success = await _authService.deleteUserAccount();
+    if (success) {
+      notifyListeners();
+    }
+    return success;
   }
 }

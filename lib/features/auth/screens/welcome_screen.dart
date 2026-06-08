@@ -1,6 +1,8 @@
+// lib/features/auth/screens/welcome_screen.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart'; // 🟢 Importación para abrir links externos
 import '../../../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
@@ -45,6 +47,41 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     );
   }
 
+  // 🟢 NUEVO: Método para lanzar WhatsApp hacia soporte de conductores
+  Future<void> _launchSupportWhatsApp() async {
+    // Reemplaza el número '573000000000' por tu número real de soporte corporativo para conductores
+    final Uri whatsappUri = Uri.parse(
+      "https://wa.me/573112321539?text=Hola%20VAMOS,%20necesito%20soporte%20con%20la%20aplicaci%C3%B3n%20de%20Conductores.",
+    );
+    try {
+      if (await canLaunchUrl(whatsappUri)) {
+        await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+      } else {
+        _showSupportErrorSnackBar();
+      }
+    } catch (e) {
+      _showSupportErrorSnackBar();
+    }
+  }
+
+  void _showSupportErrorSnackBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "No se pudo abrir WhatsApp. Por favor, inténtalo de nuevo.",
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -67,86 +104,127 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 colors: [Color(0xFF25335A), Color(0xFF0D121F)],
               ),
             ),
-            child: SafeArea(
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    children: [
-                      const SizedBox(
-                        height: 100,
-                      ), // Espaciado manual para control total
-                      _buildFadeIn(
-                        delay: 0,
-                        child: Hero(
-                          tag: 'logo',
-                          // ESTO ACTIVA EL MOVIMIENTO EN CURVA:
-                          createRectTween: (begin, end) {
-                            return MaterialRectArcTween(begin: begin, end: end);
-                          },
-                          child: Image.asset(
-                            'assets/images/logo.png',
-                            height: 220,
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                      ),
+          ),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
+                    child: IntrinsicHeight(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32),
+                        child: Column(
+                          children: [
+                            const Spacer(flex: 2),
+                            _buildFadeIn(
+                              delay: 0,
+                              child: Hero(
+                                tag: 'logo',
+                                createRectTween: (begin, end) {
+                                  return MaterialRectArcTween(
+                                    begin: begin,
+                                    end: end,
+                                  );
+                                },
+                                child: Image.asset(
+                                  'assets/images/logo.png',
+                                  height: 220,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
 
-                      const SizedBox(height: 10),
-                      _buildFadeIn(
-                        delay: 200,
-                        child: Text(
-                          "Gestiona tus servicios corporativos y cumple la normativa legal con tecnología de punta.",
-                          textAlign: TextAlign.center,
-                          style: GoogleFonts.montserrat(
-                            fontSize: 15,
-                            // ignore: deprecated_member_use
-                            color: Colors.white.withOpacity(0.6),
-                            height: 1.6,
-                            fontWeight: FontWeight.w500,
-                          ),
+                            const SizedBox(height: 10),
+                            _buildFadeIn(
+                              delay: 200,
+                              child: Text(
+                                "Gestiona tus servicios corporativos y cumple la normativa legal con tecnología de punta.",
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 15,
+                                  color: Colors.white.withValues(
+                                    alpha: 0.6,
+                                  ), // Reemplazado withOpacity obsoleto
+                                  height: 1.6,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 80),
+                            Text(
+                              "PANEL DE ACCESO",
+                              style: GoogleFonts.montserrat(
+                                fontSize: 13,
+                                color: AppColors.primaryGreen,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 3,
+                              ),
+                            ),
+                            const SizedBox(height: 25),
+                            _buildFadeIn(
+                              delay: 400,
+                              child: _buildRoleButton(
+                                label: "Iniciar Sesión",
+                                subLabel: "Ya soy parte de la flota",
+                                icon: Icons.vpn_key_rounded,
+                                isPrimary: true,
+                                destination: const LoginScreen(),
+                              ),
+                            ),
+                            _buildFadeIn(
+                              delay: 600,
+                              child: _buildRoleButton(
+                                label: "Registrarme",
+                                subLabel: "Quiero unirme a Vamos",
+                                icon: Icons.add_business_rounded,
+                                isPrimary: false,
+                                destination: const SplashScreen(
+                                  logoPath: 'assets/images/logo.png',
+                                  nextRoute: '/register',
+                                  isDark: true,
+                                ),
+                              ),
+                            ),
+
+                            const Spacer(flex: 1),
+
+                            // 🟢 NUEVO: BOTÓN DE SOPORTE POR WHATSAPP EN ESTILO DRIVER DARK
+                            _buildFadeIn(
+                              delay: 800,
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 20),
+                                child: TextButton.icon(
+                                  onPressed: _launchSupportWhatsApp,
+                                  icon: const Icon(
+                                    Icons.support_agent_rounded,
+                                    color: AppColors.primaryGreen,
+                                    size: 22,
+                                  ),
+                                  label: Text(
+                                    "Contactar a Soporte",
+                                    style: GoogleFonts.montserrat(
+                                      color: Colors.white70,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      decoration: TextDecoration.underline,
+                                      decorationColor: Colors.white30,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            const Spacer(flex: 1),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 80),
-                      Text(
-                        "PANEL DE ACCESO",
-                        style: GoogleFonts.montserrat(
-                          fontSize: 13, // Igualado a User
-                          color: AppColors.primaryGreen,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 3,
-                        ),
-                      ),
-                      const SizedBox(height: 25),
-                      _buildFadeIn(
-                        delay: 400,
-                        child: _buildRoleButton(
-                          label: "Iniciar Sesión",
-                          subLabel: "Ya soy parte de la flota",
-                          icon: Icons.vpn_key_rounded,
-                          isPrimary: true,
-                          destination: const LoginScreen(),
-                        ),
-                      ),
-                      _buildFadeIn(
-                        delay: 600,
-                        child: _buildRoleButton(
-                          label: "Registrarme",
-                          subLabel: "Quiero unirme a Vamos",
-                          icon: Icons.add_business_rounded,
-                          isPrimary: false,
-                          // CAMBIO AQUÍ: Enviamos a la SplashScreen
-                          destination: const SplashScreen(
-                            logoPath: 'assets/images/logo.png',
-                            nextRoute: '/register',
-                            isDark: true, // Estilo Driver
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ],
@@ -177,31 +255,21 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
         child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: 15,
-            sigmaY: 15,
-          ), // Desenfoque profundo tipo iOS
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: Colors.white.withValues(
-                  alpha: 0.15,
-                ), // Brillo en el borde
+                color: Colors.white.withValues(alpha: 0.15),
                 width: 1.5,
               ),
-              // GRADIENTE PARA MANTENER EL COLOR VIVO
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: isPrimary
                     ? [
-                        AppColors.primaryGreen.withValues(
-                          alpha: 0.8,
-                        ), // Arriba más vivo
-                        AppColors.primaryGreen.withValues(
-                          alpha: 0.6,
-                        ), // Abajo más traslúcido
+                        AppColors.primaryGreen.withValues(alpha: 0.8),
+                        AppColors.primaryGreen.withValues(alpha: 0.6),
                       ]
                     : [
                         Colors.white.withValues(alpha: 0.1),
@@ -212,8 +280,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             child: ElevatedButton(
               onPressed: () => _navigateTo(destination),
               style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    Colors.transparent, // Fondo manejado por el Container
+                backgroundColor: Colors.transparent,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   vertical: 20,
@@ -299,13 +366,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           Image.asset('assets/images/logo.png', width: 150),
           const SizedBox(height: 50),
           SizedBox(
-            // <--- QUITA EL 'const' DE AQUÍ
             width: 160,
             child: LinearProgressIndicator(
               color: AppColors.primaryGreen,
-              backgroundColor: Colors.white.withValues(
-                alpha: 0.1,
-              ), // Esto ya no dará error
+              backgroundColor: Colors.white.withValues(alpha: 0.1),
               minHeight: 2,
             ),
           ),

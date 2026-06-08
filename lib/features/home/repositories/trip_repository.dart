@@ -12,7 +12,13 @@ abstract class TripRepository {
     double? lat,
     double? lng,
   });
-  Future<void> updateLocation(String tripId, double lat, double lng);
+  Future<void> updateLocation(
+    String tripId,
+    double lat,
+    double lng, {
+    double? speed,
+    double? bearing,
+  });
   Stream<double> listenForWalletUpdates(String userId);
   Future<Trip> confirmCashPayment(String tripId, PaymentMethod method);
   Stream<void> listenForFleetChanges();

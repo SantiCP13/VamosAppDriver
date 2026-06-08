@@ -1,3 +1,5 @@
+// lib/features/history/screens/trip_history_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -42,7 +44,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // --- CABECERA ESTILO BILLETERA ---
+            // Cabecera premium consistente
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
@@ -72,7 +74,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
               ),
             ),
 
-            // --- CUERPO ---
+            // Cuerpo
             Expanded(
               child: _isLoading
                   ? const Center(
@@ -112,77 +114,223 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
     );
 
     return Container(
-      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: cardColor.withValues(alpha: 0.8),
         borderRadius: BorderRadius.circular(25),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                DateFormat(
-                  'dd MMM, yyyy • hh:mm a',
-                ).format(trip.date).toUpperCase(),
-                style: GoogleFonts.montserrat(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white54,
-                  letterSpacing: 1,
+          // Sección Cabecera de Tarjeta
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.calendar_today_rounded,
+                      size: 11,
+                      color: Colors.white30,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      DateFormat(
+                        'EEE, d MMM • hh:mm a',
+                        'es',
+                      ).format(trip.date).toUpperCase(),
+                      style: GoogleFonts.montserrat(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white54,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              Text(
-                currencyFormat.format(trip.price),
-                style: GoogleFonts.montserrat(
-                  color: AppColors.primaryGreen,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        size: 10,
+                        color: AppColors.primaryGreen,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        "COMPLETADO",
+                        style: GoogleFonts.montserrat(
+                          fontSize: 9,
+                          color: AppColors.primaryGreen,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 15),
-            child: Divider(color: Colors.white10),
+
+          const Divider(height: 1, color: Colors.white10),
+
+          // Sección Ruta Detallada (Timeline)
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                _buildRouteRow(
+                  Icons.radio_button_on,
+                  AppColors.primaryGreen,
+                  "Origen",
+                  trip.originAddress,
+                  isMain: true,
+                ),
+                _buildRouteConnector(),
+                _buildRouteRow(
+                  Icons.location_on_rounded,
+                  Colors.redAccent,
+                  "Destino",
+                  trip.destinationAddress,
+                ),
+              ],
+            ),
           ),
-          _buildAddressRow(
-            Icons.radio_button_checked,
-            AppColors.primaryGreen,
-            trip.originAddress,
-          ),
-          const SizedBox(height: 12),
-          _buildAddressRow(
-            Icons.location_on_rounded,
-            Colors.redAccent,
-            trip.destinationAddress,
+
+          const Divider(height: 1, color: Colors.white10),
+
+          // Ganancia Total de Tarjeta
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "GANANCIA NETO",
+                      style: GoogleFonts.montserrat(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white30,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      currencyFormat.format(trip.price),
+                      style: GoogleFonts.montserrat(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAddressRow(IconData icon, Color color, String text) => Row(
-    children: [
-      Icon(icon, size: 16, color: color),
-      const SizedBox(width: 12),
-      Expanded(
-        child: Text(
-          text,
-          style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+  Widget _buildRouteRow(
+    IconData icon,
+    Color color,
+    String label,
+    String address, {
+    bool isMain = false,
+  }) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 14, color: color),
         ),
-      ),
-    ],
-  );
+        const SizedBox(width: 15),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: GoogleFonts.montserrat(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                  color: isMain ? AppColors.primaryGreen : Colors.white30,
+                ),
+              ),
+              Text(
+                address,
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRouteConnector() {
+    return Row(
+      children: [
+        const SizedBox(width: 13),
+        Container(
+          width: 1.5,
+          height: 12,
+          color: Colors.white.withValues(alpha: 0.08),
+        ),
+      ],
+    );
+  }
 
   Widget _buildEmptyState() => Center(
-    child: Text(
-      "SIN VIAJES REGISTRADOS",
-      style: GoogleFonts.montserrat(color: Colors.white30, letterSpacing: 1),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.auto_graph_rounded, size: 80, color: Colors.white10),
+        const SizedBox(height: 20),
+        Text(
+          "Sin aventuras registradas",
+          style: GoogleFonts.montserrat(
+            color: Colors.white30,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+          ),
+        ),
+        Text(
+          "Tus viajes completados aparecerán aquí",
+          style: GoogleFonts.poppins(color: Colors.white24, fontSize: 12),
+        ),
+      ],
     ),
   );
 }

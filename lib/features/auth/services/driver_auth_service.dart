@@ -1,10 +1,10 @@
-// driver_auth_service.dart
+// lib/features/auth/services/driver_auth_service.dart
 import 'dart:async';
-import 'dart:convert'; // 👈 Agregado para el manejo de JSON de caché offline
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // 👈 Asegúrate de tener este import si se requiere interactuar directamente
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 // IMPORTANTE: Rutas de importación del núcleo de tu aplicación
 import '../../../core/network/api_client.dart';
@@ -43,7 +43,6 @@ class DriverAuthService {
       final userData = response.data['data']['user'];
       final String token = response.data['data']['token'];
 
-      // --- CORRECCIÓN DE ROL: Sincronizado a Rol 6 (Conductor) ---
       final int roleId =
           int.tryParse(
             (userData['id_role'] ?? userData['role_id'])?.toString() ?? '0',
@@ -54,7 +53,6 @@ class DriverAuthService {
         throw Exception('Esta cuenta no está registrada como Conductor.');
       }
 
-      // 2. VALIDACIÓN DE CUENTA ACTIVA
       final bool isActive =
           userData['active'] == 1 || userData['active'] == true;
       if (!isActive && userData['status'] == 'VERIFIED') {
@@ -62,8 +60,6 @@ class DriverAuthService {
       }
 
       final user = User.fromMap(userData);
-
-      // 3. GUARDADO SEGURO
       await _saveSession(user, token);
 
       return user;
@@ -89,7 +85,6 @@ class DriverAuthService {
     }
   }
 
-  // --- OBTENCIÓN DE SESIÓN CON RESILIENCIA OFFLINE ---
   Future<UserVerificationStatus?> verifySessionAndGetStatus() async {
     try {
       final storage = sl<StorageService>();
@@ -104,7 +99,6 @@ class DriverAuthService {
       if (response.data['data'] != null) {
         _currentUser = User.fromMap(response.data['data']);
 
-        // Guardamos en caché local para tener los datos disponibles si nos quedamos sin señal
         await const FlutterSecureStorage().write(
           key: 'cached_driver',
           value: jsonEncode(response.data['data']),
@@ -115,14 +109,12 @@ class DriverAuthService {
       return null;
     } catch (e) {
       if (e is DioException) {
-        // Si el servidor confirma explícitamente problemas con el token, forzamos null (logout)
         if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
           debugPrint("Sesión invalidada por el servidor (401/403).");
           return null;
         }
       }
 
-      // Si es un error de red o de comunicación, cargamos los datos desde la caché local
       debugPrint(
         "Fallo de red al validar sesión. Intentando recuperar caché local del conductor.",
       );
@@ -223,7 +215,6 @@ class DriverAuthService {
       final userData = response.data['data']['user'];
       _currentUser = User.fromMap(userData);
 
-      // Guardamos el perfil en caché
       await const FlutterSecureStorage().write(
         key: 'cached_driver',
         value: jsonEncode(userData),
@@ -342,7 +333,6 @@ class DriverAuthService {
         if (response.data['user'] != null) {
           _currentUser = User.fromMap(response.data['user']);
 
-          // Actualizamos la caché con los nuevos datos
           await const FlutterSecureStorage().write(
             key: 'cached_driver',
             value: jsonEncode(response.data['user']),
@@ -355,6 +345,93 @@ class DriverAuthService {
       debugPrint("Error en DriverAuthService: ${e.response?.data}");
       throw Exception(
         e.response?.data['message'] ?? 'Error actualizando perfil',
+      );
+    }
+  }
+
+  // 🟢 NUEVO MÉTODO: Petición para actualizar contraseña de conductor
+  Future<Map<String, dynamic>> changePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    await _apiClient.simulateDelay();
+
+    if (_apiClient.isMockOnly) {
+      return {
+        'success': true,
+        'message': 'Contraseña actualizada correctamente (Simulado).',
+      };
+    }
+
+    try {
+      final response = await _apiClient.dio.post(
+        '/me/change-password',
+        data: {
+          'current_password': currentPassword,
+          'password': newPassword,
+          'password_confirmation': confirmPassword,
+        },
+      );
+
+      if (response.data['success'] == true ||
+          response.data['status'] == 'success') {
+        return {
+          'success': true,
+          'message':
+              response.data['message'] ??
+              'Contraseña actualizada correctamente.',
+        };
+      }
+      return {
+        'success': false,
+        'message':
+            response.data['message'] ?? 'No se pudo actualizar la contraseña.',
+      };
+    } on DioException catch (e) {
+      debugPrint("Error actualizando contraseña: ${e.response?.data}");
+      String msg = 'Error al actualizar contraseña';
+      if (e.response?.data is Map) {
+        msg = e.response?.data['message'] ?? msg;
+      }
+      return {'success': false, 'message': msg};
+    }
+  }
+
+  // 🟢 NUEVO MÉTODO: Petición para eliminar definitivamente la cuenta
+  Future<bool> deleteUserAccount() async {
+    await _apiClient.simulateDelay();
+
+    if (_apiClient.isMockOnly) {
+      await logout();
+      return true;
+    }
+
+    try {
+      final response = await _apiClient.dio.post('/me/delete');
+
+      if (response.data['success'] == true ||
+          response.data['status'] == 'success') {
+        await logout();
+        return true;
+      }
+      return false;
+    } on DioException catch (e) {
+      debugPrint("Error eliminando cuenta (me/delete): ${e.response?.data}");
+
+      // Fallback defensivo usando verbo DELETE
+      try {
+        final response = await _apiClient.dio.delete('/me');
+        if (response.data['success'] == true ||
+            response.data['status'] == 'success') {
+          await logout();
+          return true;
+        }
+      } catch (e2) {
+        debugPrint("Error fallback DELETE /me: $e2");
+      }
+      throw Exception(
+        e.response?.data['message'] ?? 'Error al eliminar la cuenta',
       );
     }
   }
@@ -395,7 +472,6 @@ class DriverAuthService {
     final response = await _apiClient.dio.post('/driver/submit-review');
     _currentUser = User.fromMap(response.data['user']);
 
-    // Actualizamos los datos del usuario en la caché local
     await const FlutterSecureStorage().write(
       key: 'cached_driver',
       value: jsonEncode(response.data['user']),
@@ -408,7 +484,6 @@ class DriverAuthService {
     await sl<StorageService>().saveToken(token);
     _currentUser = user;
 
-    // Guardar en caché local tras loguearse
     try {
       await const FlutterSecureStorage().write(
         key: 'cached_driver',
@@ -423,9 +498,7 @@ class DriverAuthService {
     try {
       await sl<StorageService>().deleteAll();
       await sl<StorageService>().clearCurrentTrip();
-      await const FlutterSecureStorage().delete(
-        key: 'cached_driver',
-      ); // Limpiamos la caché física
+      await const FlutterSecureStorage().delete(key: 'cached_driver');
       _currentUser = null;
       debugPrint("Sesión destruida completamente");
     } catch (e) {

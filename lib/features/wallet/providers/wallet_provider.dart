@@ -17,17 +17,26 @@ class WalletProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
 
   // Tu lógica original de filtrado local se mantiene
+  // 🟢 MODIFICADO: Suma de ganancias netas reales de hoy (Efectivo y Corporativos)
   double get todayEarnings {
     final now = DateTime.now();
     return _transactions
-        .where(
-          (t) =>
-              t.isCredit &&
-              t.date.year == now.year &&
+        .where((t) {
+          return t.date.year == now.year &&
               t.date.month == now.month &&
-              t.date.day == now.day,
-        )
-        .fold(0.0, (sum, t) => sum + t.amount);
+              t.date.day == now.day;
+        })
+        .fold(0.0, (sum, t) {
+          // 1. Si es un viaje, sumamos su ganancia neta (independiente de si fue cobro de comisión o depósito)
+          if (t.originAddress != null) {
+            return sum + (t.netEarnings ?? 0.0);
+          }
+          // 2. Si es una recarga directa o ajuste positivo de saldo de la app
+          if (t.isCredit) {
+            return sum + t.amount;
+          }
+          return sum;
+        });
   }
 
   Future<void> loadWalletData({bool force = false}) async {

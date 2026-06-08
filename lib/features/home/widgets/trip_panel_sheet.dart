@@ -60,27 +60,64 @@ class TripPanelSheet extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _stateHeaderLabel(trip.status, primaryColor),
-                  // CAMBIO: Permitimos abrir el FUEC en cualquier estado del viaje activo
                   _fuecButton(trip, context),
                 ],
               ),
               const SizedBox(height: 18),
 
-              // SECCIÓN: PASAJERO PRINCIPAL
+              // SECCIÓN: PASAJERO PRINCIPAL (Ahora con WhatsApp)
               _buildClientSection(trip, provider, primaryColor, context),
               const SizedBox(height: 16),
 
-              // MANIFIESTO DE PASAJEROS ADICIONALES (Ocultar si ya está en sitio de espera "ARRIVED")
+              // MANIFIESTO DE PASAJEROS ADICIONALES
               if (trip.status != TripStatus.ARRIVED) ...[
                 _buildPassengerManifest(trip.passengers),
                 const SizedBox(height: 16),
               ],
 
-              // TIMELINE DE DIRECCIONES (Ocultar si ya está en sitio de espera "ARRIVED")
+              // TIMELINE DE DIRECCIONES
               if (trip.status != TripStatus.ARRIVED) ...[
                 _buildTimelineAddresses(trip),
               ],
-
+              if (trip.status == TripStatus.ARRIVED) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 14,
+                    horizontal: 20,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(
+                      0xFF10B981,
+                    ).withValues(alpha: 0.12), // Verde esmeralda translúcido
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.hourglass_bottom_rounded,
+                        color: Color(0xFF10B981),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        "EL PASAJERO TIENE: ${_formatWaitTime(provider.waitSeconds)} MIN",
+                        style: GoogleFonts.montserrat(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          color: const Color(0xFF10B981),
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               // Botón de adición de tiempo en Estado ARRIVED
               if (trip.status == TripStatus.ARRIVED) ...[
                 const SizedBox(height: 16),
@@ -148,7 +185,6 @@ class TripPanelSheet extends StatelessWidget {
   Widget _fuecButton(Trip trip, BuildContext context) {
     return InkWell(
       onTap: () {
-        // CAMBIO: Se implementa la URL de respaldo basada en el endpoint del backend
         final String fallbackUrl =
             (trip.fuecUrl != null && trip.fuecUrl!.isNotEmpty)
             ? trip.fuecUrl!
@@ -198,6 +234,7 @@ class TripPanelSheet extends StatelessWidget {
     return "";
   }
 
+  // MODIFICADO: Ahora el botón de contacto abre un chat de WhatsApp con el pasajero
   Widget _buildClientSection(
     Trip trip,
     HomeProvider provider,
@@ -260,36 +297,46 @@ class TripPanelSheet extends StatelessWidget {
               ],
             ),
           ),
-          _roundIconButton(Icons.phone_in_talk_rounded, activeColor, () async {
-            if (rawPhone.isNotEmpty) {
-              final String cleanPhone = rawPhone.replaceAll(
-                RegExp(r'[^0-9]'),
-                '',
-              );
-              final Uri launchUri = Uri(scheme: 'tel', path: cleanPhone);
-              if (await canLaunchUrl(launchUri)) {
-                await launchUrl(launchUri);
+          // Se cambió el ícono a chat y se configuró la acción para redirigir a WhatsApp wa.me
+          _roundIconButton(
+            Icons.chat_bubble_outline_rounded,
+            activeColor,
+            () async {
+              if (rawPhone.isNotEmpty) {
+                final String cleanPhone = rawPhone.replaceAll(
+                  RegExp(r'[^0-9]'),
+                  '',
+                );
+                final Uri whatsappUri = Uri.parse("https://wa.me/$cleanPhone");
+                if (await canLaunchUrl(whatsappUri)) {
+                  await launchUrl(
+                    whatsappUri,
+                    mode: LaunchMode.externalApplication,
+                  );
+                } else {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'No se pudo abrir WhatsApp para chatear con el pasajero',
+                        ),
+                      ),
+                    );
+                  }
+                }
               } else {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
-                        'No se pudo iniciar la llamada al pasajero',
+                        'Número de contacto no disponible en la BD',
                       ),
                     ),
                   );
                 }
               }
-            } else {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Número de contacto no disponible en la BD'),
-                  ),
-                );
-              }
-            }
-          }),
+            },
+          ),
         ],
       ),
     );
@@ -426,55 +473,71 @@ class TripPanelSheet extends StatelessWidget {
     BuildContext context,
     HomeProvider provider,
   ) {
+    // Leemos el estado dinámico desde el Provider
+    final bool yaAgregado = provider.extraWaitingTimeAdded;
+
     return SizedBox(
       width: double.infinity,
       height: 48,
       child: OutlinedButton.icon(
-        onPressed: () async {
-          try {
-            await provider.addExtraWaitingTime(5);
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    "Se han adicionado +5 minutos al tiempo de espera del pasajero",
-                  ),
-                  backgroundColor: AppColors.primaryGreen,
-                  duration: Duration(seconds: 3),
-                ),
-              );
-            }
-          } catch (e) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text("No se pudo agregar tiempo extra: $e"),
-                  backgroundColor: Colors.redAccent,
-                ),
-              );
-            }
-          }
-        },
-        icon: const Icon(
+        // Si ya fue agregado, el onPressed pasa a ser null para deshabilitar el botón
+        onPressed: yaAgregado
+            ? null
+            : () async {
+                try {
+                  // Enviamos 3 minutos al backend
+                  await provider.addExtraWaitingTime(3);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          "Se han adicionado +3 minutos al tiempo de espera del pasajero",
+                        ),
+                        backgroundColor: AppColors.primaryGreen,
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("No se pudo agregar tiempo extra: $e"),
+                        backgroundColor: Colors.redAccent,
+                      ),
+                    );
+                  }
+                }
+              },
+        icon: Icon(
           Icons.add_alarm_rounded,
-          color: Colors.amberAccent,
+          color: yaAgregado ? Colors.grey[600] : Colors.amberAccent,
           size: 20,
         ),
         label: Text(
-          "ADICIONAR +5 MIN DE ESPERA",
+          yaAgregado
+              ? "TIEMPO EXTRA MÁXIMO ADICIONADO"
+              : "ADICIONAR +3 MIN DE ESPERA",
           style: GoogleFonts.montserrat(
-            color: Colors.amberAccent,
+            color: yaAgregado ? Colors.grey[600] : Colors.amberAccent,
             fontWeight: FontWeight.w900,
             fontSize: 12,
             letterSpacing: 0.8,
           ),
         ),
         style: OutlinedButton.styleFrom(
-          side: const BorderSide(color: Colors.amberAccent, width: 1.5),
+          side: BorderSide(
+            color: yaAgregado
+                ? (Colors.grey[800] ?? Colors.grey)
+                : Colors.amberAccent,
+            width: 1.5,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          backgroundColor: Colors.amber.withValues(alpha: 0.05),
+          backgroundColor: yaAgregado
+              ? Colors.white.withValues(alpha: 0.02)
+              : Colors.amber.withValues(alpha: 0.05),
         ),
       ),
     );
@@ -590,13 +653,23 @@ class TripPanelSheet extends StatelessWidget {
     }
   }
 
+  String _formatWaitTime(int seconds) {
+    final int mins = seconds ~/ 60;
+    final int secs = seconds % 60;
+    return "$mins:${secs.toString().padLeft(2, '0')}";
+  }
+
   String _getActionText(TripStatus status) => status == TripStatus.ACCEPTED
       ? "Llegué al sitio"
       : (status == TripStatus.ARRIVED ? "Iniciar carrera" : "Finalizar viaje");
 
   void _confirmCancel(BuildContext context, HomeProvider provider) {
+    final trip = provider.activeTrip;
+    if (trip == null) return;
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         backgroundColor: const Color(0xFF1F2937),
@@ -628,7 +701,7 @@ class TripPanelSheet extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                "Si cancelas este viaje activo, podrías recibir una penalización en tu historial.",
+                "Si cancelas este viaje activo que ya se encuentra EN CURSO, se aplicará la penalización correspondiente configurada en el sistema.",
                 textAlign: TextAlign.center,
                 style: GoogleFonts.montserrat(
                   color: Colors.grey[400],

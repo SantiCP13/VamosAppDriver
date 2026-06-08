@@ -14,11 +14,14 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'core/di/injection_container.dart' as di;
 import 'features/auth/screens/splash_screen.dart';
 import 'package:flutter/services.dart';
+import 'core/services/notification_service.dart'; // <--- AGREGAR ESTE IMPORT
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.init(); // <--- AGREGAR ESTA LÍNEA
+
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

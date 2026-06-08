@@ -20,7 +20,8 @@ import '../../../core/models/vehicle_model.dart';
 import '../../../core/services/storage_service.dart';
 import '../../../core/utils/map_launcher.dart';
 import '../../../core/di/injection_container.dart';
-
+import 'dart:io'; // <--- RESUELVE EL ERROR DE 'File'
+import '../../../core/services/notification_service.dart'; // <--- RESUELVE EL ERROR DE 'NotificationService'
 // --------------------------------------------------------
 // IMPORTS SERVICES & REPOSITORIES
 // --------------------------------------------------------
@@ -54,7 +55,8 @@ class HomeProvider extends ChangeNotifier {
   // Añade estos Getters en HomeProvider.dart
   double get activeTripDistance => _activeTrip?.distanceKm ?? 0.0;
   // --- VARIABLES PARA CÁLCULO LOCAL DE RUTA (AHORRO API) ---
-
+  bool _extraWaitingTimeAdded = false;
+  bool get extraWaitingTimeAdded => _extraWaitingTimeAdded;
   // Ubicación y Rotación
   LatLng? _currentPosition;
   double _currentHeading = 0.0;
@@ -71,6 +73,35 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- VARIABLES DE ROBUSTEZ Y CONEXIÓN (Estilo Uber/DiDi) ---
+  bool _isNetworkDisconnected = false;
+  bool get isNetworkDisconnected => _isNetworkDisconnected;
+
+  bool _isGpsSignalLost = false;
+  bool get isGpsSignalLost => _isGpsSignalLost;
+
+  Timer? _networkMonitorTimer;
+  // --- NUEVAS VARIABLES PARA EL CONTROL DE TURNOS (3 ESTADOS) ---
+  String _turnoEstado = 'OFFLINE'; // Valores: 'OFFLINE', 'ACTIVO', 'BREAK'
+  int _breakSecondsRemaining = 900; // 15 minutos en segundos (15 * 60 = 900)
+  Timer? _breakTimer;
+  DateTime? _breakStartTime;
+  // En HomeProvider.dart:
+  bool _alreadyHadLunch = false;
+  bool get alreadyHadLunch => _alreadyHadLunch;
+  String get turnoEstado => _turnoEstado;
+  int get breakSecondsRemaining => _breakSecondsRemaining;
+
+  // Formateador para mostrar el tiempo del break en formato MM:SS
+  String get breakTimerFormated {
+    final minutes = (_breakSecondsRemaining ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_breakSecondsRemaining % 60).toString().padLeft(2, '0');
+    return "$minutes:$seconds";
+  }
+
+  int _waitSeconds = 300; // 5 minutos por defecto
+  int get waitSeconds => _waitSeconds;
+  Timer? _waitTimer;
   // 1. Calcula el rumbo matemático exacto entre los movimientos del GPS local
   double _calculateBearing(LatLng start, LatLng end) {
     double startLat = start.latitude * (math.pi / 180.0);
@@ -124,9 +155,381 @@ class HomeProvider extends ChangeNotifier {
   Timer? _validationTimer;
   String get incomingTripEta => _incomingTripEta;
   Timer? _routeRecalculateTimer;
-  // --- VARIABLES PARA MOTOR DE TRAZADO DINÁMICO (AHORRO Y PRECISIÓN) ---
-  // --- VARIABLES PARA CÁLCULO LOCAL DE RUTA (AHORRO API) ---
-  // --- VARIABLES PARA MOTOR DE TRAZADO DINÁMICO (AHORRO Y PRECISIÓN) ---
+  // En HomeProvider.dart:
+
+  // Temporizador para el almuerzo
+  int _lunchSecondsRemaining = 3600; // 1 hora
+  Timer? _lunchTimer;
+  DateTime? _lunchStartTime;
+
+  int get lunchSecondsRemaining => _lunchSecondsRemaining;
+
+  String get lunchTimerFormated {
+    final hours = (_lunchSecondsRemaining ~/ 3600).toString().padLeft(2, '0');
+    final minutes = ((_lunchSecondsRemaining % 3600) ~/ 60).toString().padLeft(
+      2,
+      '0',
+    );
+    final seconds = (_lunchSecondsRemaining % 60).toString().padLeft(2, '0');
+    return "$hours:$minutes:$seconds";
+  }
+
+  /// Realiza un ping rápido a nivel de sockets para confirmar conectividad real
+  Future<bool> _hasInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup(
+        'dns.google',
+      ).timeout(const Duration(seconds: 3));
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Cambia el estado de red de forma segura y notifica al UI
+  void _setNetworkDisconnected(bool value) {
+    if (_isNetworkDisconnected != value) {
+      _isNetworkDisconnected = value;
+      notifyListeners();
+    }
+  }
+
+  /// Monitor constante que se ejecuta periódicamente para forzar la reconexión
+  void _startNetworkMonitor() {
+    _networkMonitorTimer?.cancel();
+    _networkMonitorTimer = Timer.periodic(const Duration(seconds: 5), (
+      timer,
+    ) async {
+      final hasInternet = await _hasInternetConnection();
+      _setNetworkDisconnected(!hasInternet);
+
+      // Si se recupera la conexión y el conductor está online, sincronizar ubicación de inmediato
+      if (hasInternet && _isOnline && _currentPosition != null) {
+        if (_activeTrip != null) {
+          _sendTripLocationToBackend(
+            _activeTrip!.id,
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            0.0,
+          );
+        } else {
+          _sendPositionToBackend(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+          );
+        }
+      }
+    });
+  }
+
+  void _stopNetworkMonitor() {
+    _networkMonitorTimer?.cancel();
+    _networkMonitorTimer = null;
+  }
+
+  void _startLunchTimer() {
+    _lunchTimer?.cancel();
+    _lunchSecondsRemaining = 3600;
+    _lunchStartTime = DateTime.now();
+
+    // Notificación nativa programada para 1 hora
+    NotificationService.scheduleNotification(
+      id: 888,
+      title: "🍔 ¡Fin de tu hora de Almuerzo!",
+      body: "Tu descanso de almuerzo ha finalizado. Debes reanudar tu turno.",
+      delay: const Duration(hours: 1), // O segundos para pruebas rápidas
+    );
+
+    _lunchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_lunchStartTime != null) {
+        final elapsed = DateTime.now().difference(_lunchStartTime!).inSeconds;
+        _lunchSecondsRemaining = 3600 - elapsed;
+
+        if (_lunchSecondsRemaining <= 0) {
+          _lunchSecondsRemaining = 0;
+          _stopLunchTimer();
+
+          NotificationService.showNotification(
+            id: 888,
+            title: "🍔 ¡Fin de tu hora de Almuerzo!",
+            body: "Reanuda tu turno para continuar prestando servicios.",
+          );
+        }
+        notifyListeners();
+      }
+    });
+  }
+
+  void _stopLunchTimer() {
+    _lunchTimer?.cancel();
+    _lunchTimer = null;
+    _lunchStartTime = null;
+    NotificationService.cancelNotification(888);
+    notifyListeners();
+  }
+
+  /// Acción para Iniciar Almuerzo
+  Future<String?> iniciarAlmuerzo() async {
+    if (_isLoading) return null;
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final position = await _locationService.getCurrentLocation();
+      // Asegúrate de castear el repositorio a ApiDriverRepository si es necesario o declararlo en la interfaz
+      final res = await _driverRepository.iniciarAlmuerzo(
+        lat: position?.latitude ?? _currentPosition?.latitude,
+        lng: position?.longitude ?? _currentPosition?.longitude,
+      );
+
+      if (res['status'] == 'success') {
+        _turnoEstado = 'ALMUERZO';
+        _isOnline = false;
+        _alreadyHadLunch = true; // 🟢 ALMUERZO UTILIZADO
+
+        _stopTracking();
+        _stopListeningTrips();
+
+        // Iniciar reloj de 1 hora
+        _startLunchTimer();
+
+        _isLoading = false;
+        notifyListeners();
+        return null;
+      }
+      return "No se pudo registrar tu almuerzo.";
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.toString().replaceAll("Exception: ", "");
+    }
+  }
+
+  // Modifica reanudarTurnoCompleto() para apagar el temporizador de almuerzo si estaba activo:
+  Future<String?> reanudarTurnoCompleto() async {
+    if (_isLoading) return null;
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final position = await _locationService.getCurrentLocation();
+      final res = await _driverRepository.reanudarTurno(
+        lat: position?.latitude ?? _currentPosition?.latitude,
+        lng: position?.longitude ?? _currentPosition?.longitude,
+      );
+
+      if (res['status'] == 'success') {
+        _turnoEstado = 'ACTIVO';
+        _isOnline = true;
+
+        // 🟢 Apagar temporizadores de pausa y de almuerzo de forma segura
+        _stopBreakTimer();
+        _stopLunchTimer();
+
+        _startListeningTrips();
+        _startTracking();
+
+        _isLoading = false;
+        notifyListeners();
+        return null;
+      }
+      return "No se pudo reanudar el turno.";
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.toString().replaceAll("Exception: ", "");
+    }
+  }
+
+  /// Inicia el temporizador de cuenta regresiva del break (CONFIGURADO A 10 SEGUNDOS PARA PRUEBA)
+  void _startBreakTimer() {
+    _breakTimer?.cancel();
+    _breakSecondsRemaining = 10; // 🟢 Cambiado temporalmente de 900 a 10
+    _breakStartTime = DateTime.now();
+
+    // Programamos la alarma nativa para dentro de 10 segundos
+    NotificationService.scheduleNotification(
+      id: 999,
+      title: "⏰ ¡Fin de tu Break de 15 min!",
+      body: "Debes reanudar tu turno o terminar el turno de inmediato.",
+      delay: const Duration(seconds: 10), // 🟢 10 segundos
+    );
+
+    _breakTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_breakStartTime != null) {
+        final elapsed = DateTime.now().difference(_breakStartTime!).inSeconds;
+
+        // 🟢 Cambiado temporalmente de 900 a 10 para que la pantalla llegue a cero en 10 segundos
+        _breakSecondsRemaining = 10 - elapsed;
+
+        if (_breakSecondsRemaining <= 0) {
+          _breakSecondsRemaining = 0;
+          _stopBreakTimer();
+
+          // Alarma de respaldo por si el conductor tiene la app abierta en primer plano
+          NotificationService.showNotification(
+            id: 999,
+            title: "⏰ ¡Fin de tu Break de 15 min!",
+            body: "Debes reanudar tu turno o terminar el turno de inmediato.",
+          );
+        }
+        notifyListeners();
+      }
+    });
+  }
+
+  /// Cancela el temporizador de la pausa
+  void _stopBreakTimer() {
+    _breakTimer?.cancel();
+    _breakTimer = null;
+    _breakStartTime = null;
+
+    // 🟢 NUEVO: Si el conductor reanuda o termina el turno antes de los 15 minutos,
+    // cancelamos la alarma programada para que no suene de manera molesta después.
+    NotificationService.cancelNotification(999);
+    notifyListeners();
+  }
+
+  /// A. INICIAR TURNO (Kilometraje + Foto inicial del tablero)
+  Future<String?> iniciarTurnoCompleto({
+    required int kilometraje,
+    required File foto,
+  }) async {
+    if (_isLoading) return null;
+    if (_selectedVehicle == null) {
+      return "⚠️ Debes seleccionar un vehículo para iniciar el turno.";
+    }
+
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      // Validar documentos locales antes de conectar
+      await _checkDocumentsValidity();
+
+      // Obtener ubicación GPS actual
+      final position = await _locationService.getCurrentLocation();
+      if (position != null) {
+        _currentPosition = LatLng(position.latitude, position.longitude);
+      }
+
+      // Llamar al endpoint del backend
+      final res = await _driverRepository.iniciarTurno(
+        idVehiculo: _selectedVehicle!.id,
+        kilometraje: kilometraje,
+        foto: foto,
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
+      );
+
+      if (res['status'] == 'success') {
+        _turnoEstado = 'ACTIVO';
+        _isOnline = true; // El conductor está en línea listo para viajes
+        _alreadyHadLunch = false; // 🟢 RESET PARA NUEVA JORNADA
+
+        // Encender rastreo en tiempo real
+        _startListeningTrips();
+        _startTracking();
+        _startRouteRecalculationTimer();
+
+        _isLoading = false;
+        notifyListeners();
+        return null; // Éxito
+      }
+      return "No se pudo iniciar el turno en el servidor.";
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.toString().replaceAll("Exception: ", "");
+    }
+  }
+
+  /// B. PAUSAR TURNO / INICIAR BREAK (Desconexión de 15 minutos)
+  Future<String?> iniciarBreak() async {
+    if (_isLoading) return null;
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final position = await _locationService.getCurrentLocation();
+      final res = await _driverRepository.pausarTurno(
+        lat: position?.latitude ?? _currentPosition?.latitude,
+        lng: position?.longitude ?? _currentPosition?.longitude,
+      );
+
+      if (res['status'] == 'success') {
+        _turnoEstado = 'BREAK';
+        _isOnline = false; // Desconectado temporalmente
+
+        // Detener rastreo temporalmente durante la pausa
+        _stopTracking();
+        _stopListeningTrips();
+
+        // Lanzar el temporizador de 15 minutos
+        _startBreakTimer();
+
+        _isLoading = false;
+        notifyListeners();
+        return null;
+      }
+      return "No se pudo registrar la pausa.";
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.toString().replaceAll("Exception: ", "");
+    }
+  }
+
+  /// C. REANUDAR TURNO (Fin de pausa, volver a estar activo para viajes)
+
+  /// D. TERMINAR TURNO (Kilometraje final + Foto final del tablero)
+  /// D. TERMINAR TURNO (Kilometraje final + Foto final del tablero + Comprobantes opcionales)
+  Future<String?> terminarTurnoCompleto({
+    required int kilometraje,
+    required File foto,
+    List<File>? comprobantesFotos, // 🟢 NUEVO: Parámetro opcional
+    List<double>? comprobantesValores, // 🟢 NUEVO: Parámetro opcional
+  }) async {
+    if (_isLoading) return null;
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final position = await _locationService.getCurrentLocation();
+      final res = await _driverRepository.terminarTurno(
+        kilometraje: kilometraje,
+        foto: foto,
+        lat: position?.latitude ?? _currentPosition?.latitude,
+        lng: position?.longitude ?? _currentPosition?.longitude,
+        comprobantesFotos:
+            comprobantesFotos, // 🟢 Enviar fotos de peajes/gasolina
+        comprobantesValores: comprobantesValores, // 🟢 Enviar valores digitados
+      );
+
+      if (res['status'] == 'success') {
+        _turnoEstado = 'OFFLINE';
+        _isOnline = false;
+
+        // Detener de forma definitiva todas las conexiones y rastreos de la jornada
+        _stopBreakTimer();
+        _stopLunchTimer();
+        _stopListeningTrips();
+        _stopTracking();
+        _activeTrip = null;
+        _routePoints = [];
+        await _storageService.clearCurrentTrip();
+
+        _isLoading = false;
+        notifyListeners();
+        return null;
+      }
+      return "No se pudo finalizar el turno.";
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.toString().replaceAll("Exception: ", "");
+    }
+  }
 
   void _startRouteRecalculationTimer() {
     _routeRecalculateTimer?.cancel();
@@ -136,7 +539,7 @@ class HomeProvider extends ChangeNotifier {
       if (_activeTrip != null) {
         _calculateRouteForCurrentStatus();
       } else {
-        _stopRouteRecalculationTimer();
+        _stopRouteRecalculationTimer(); // 🟢 Corrección aquí (añadir "ion")
       }
     });
   }
@@ -144,6 +547,27 @@ class HomeProvider extends ChangeNotifier {
   void _stopRouteRecalculationTimer() {
     _routeRecalculateTimer?.cancel();
     _routeRecalculateTimer = null;
+  }
+
+  void _startWaitTimer(Trip trip) {
+    _waitTimer?.cancel();
+    _waitSeconds = 300; // Iniciamos con el límite de 5 minutos
+
+    _waitTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_waitSeconds > 0) {
+        _waitSeconds--;
+        notifyListeners();
+      } else {
+        _stopWaitTimer();
+      }
+    });
+  }
+
+  void _stopWaitTimer() {
+    _waitTimer?.cancel();
+    _waitTimer = null;
+    _waitSeconds = 300;
+    notifyListeners();
   }
 
   void _showError(String message) {
@@ -161,15 +585,13 @@ class HomeProvider extends ChangeNotifier {
   // Agrega este método dentro de tu clase HomeProvider:
   // Reemplace el método anterior en home_provider.dart por este real:
   Future<void> addExtraWaitingTime(int minutes) async {
-    // Asegura que tengamos un viaje activo antes de proceder
-    final trip = activeTrip; // o _activeTrip, según cómo lo tenga definido
+    final trip = activeTrip;
     if (trip == null) return;
 
-    _isLoading = true; // o la variable de carga que maneje su provider
+    _isLoading = true;
     notifyListeners();
 
     try {
-      // Usamos el cliente HTTP global con sus interceptores de autorización Bearer
       final dio = ApiClient().dio;
 
       final response = await dio.post(
@@ -179,6 +601,11 @@ class HomeProvider extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         debugPrint("🟢 Tiempo extra registrado con éxito en el backend.");
+        _extraWaitingTimeAdded = true;
+        _waitSeconds +=
+            (minutes *
+            60); // 🟢 Se suman los minutos de espera extra al contador activo
+        notifyListeners();
       } else {
         throw Exception(
           "El servidor retornó un código de estado: ${response.statusCode}",
@@ -231,17 +658,40 @@ class HomeProvider extends ChangeNotifier {
 
   // Método para asegurar que no se pierdan datos críticos (como el teléfono)
   // en las respuestas simplificadas de cambio de estado del servidor.
+  // 🟢 BLINDAJE EXTREMO: Evita que datos parciales de WebSockets corrompan los datos completos en memoria
   void _updateActiveTripWithPreservation(Trip? newTrip) {
     if (newTrip == null) {
       _activeTrip = null;
+      _extraWaitingTimeAdded = false;
+      _stopWaitTimer(); // <-- Detener timer al limpiar
       return;
+    }
+
+    if (_activeTrip != null && _activeTrip!.id != newTrip.id) {
+      _extraWaitingTimeAdded = false;
+      _stopWaitTimer(); // <-- Detener para nuevo viaje
     }
 
     if (_activeTrip != null && _activeTrip!.id == newTrip.id) {
       final oldTrip = _activeTrip!;
       final bool statusChanged = oldTrip.status != newTrip.status;
 
+      final bool isNewTripPartial =
+          newTrip.originAddress == 'Origen...' || newTrip.passengers.isEmpty;
+
       _activeTrip = newTrip.copyWith(
+        originAddress: isNewTripPartial
+            ? oldTrip.originAddress
+            : newTrip.originAddress,
+        destinationAddress: isNewTripPartial
+            ? oldTrip.destinationAddress
+            : newTrip.destinationAddress,
+        originLocation: isNewTripPartial
+            ? oldTrip.originLocation
+            : newTrip.originLocation,
+        destinationLocation: isNewTripPartial
+            ? oldTrip.destinationLocation
+            : newTrip.destinationLocation,
         passengerPhone:
             (newTrip.passengerPhone == null || newTrip.passengerPhone!.isEmpty)
             ? oldTrip.passengerPhone
@@ -254,7 +704,6 @@ class HomeProvider extends ChangeNotifier {
             : newTrip.fuecUrl,
       );
 
-      // Si cambió el estado, reseteamos la polilínea y métricas para forzar recálculo fresco
       if (statusChanged) {
         _routePoints = [];
         _totalRouteDistanceMeters = 0.0;
@@ -265,6 +714,16 @@ class HomeProvider extends ChangeNotifier {
       _routePoints = [];
       _totalRouteDistanceMeters = 0.0;
       _totalRouteDurationSeconds = 0.0;
+    }
+
+    // 🟢 CONTROL DE INICIO DEL TIMER DE ESPERA
+    if (_activeTrip != null &&
+        _activeTrip!.status == TripStatus.ARRIVED &&
+        _waitTimer == null) {
+      _startWaitTimer(_activeTrip!);
+    } else if (_activeTrip != null &&
+        _activeTrip!.status != TripStatus.ARRIVED) {
+      _stopWaitTimer();
     }
   }
 
@@ -463,18 +922,16 @@ class HomeProvider extends ChangeNotifier {
   // A. INICIALIZACIÓN Y GPS
   // =======================================================
 
-  // En tu método initLocation dentro de HomeProvider.dart
+  // En HomeProvider.dart:
+
   Future<void> initLocation() async {
     _isLoading = true;
     notifyListeners();
     await loadVehicles();
 
-    // AQUÍ ESTABA EL ERROR:
-    // Debes obtener la instancia de AuthProvider primero
     final authProvider = sl<AuthProvider>();
     final wallet = sl<WalletProvider>();
 
-    // Ahora sí, usa authProvider.user
     if (authProvider.user != null) {
       await wallet.loadWalletData();
       _balance = wallet.balance;
@@ -486,13 +943,102 @@ class HomeProvider extends ChangeNotifier {
         }
       });
       _startListeningWalletUpdates(authProvider.user!.id);
+
+      // 🟢 NUEVO BLINDAJE DE SEGURIDAD: RESTAURAR EL ESTADO DEL TURNO DESDE EL SERVIDOR
+      try {
+        final turnoData = await _driverRepository.obtenerTurnoActivo();
+        if (turnoData['status'] == 'success' &&
+            turnoData['tiene_turno_activo'] == true) {
+          _turnoEstado = turnoData['estado'];
+          _alreadyHadLunch = turnoData['ya_almorzo'] ?? false;
+
+          if (_turnoEstado == 'ACTIVO') {
+            _isOnline = true;
+            _startListeningTrips();
+            _startTracking();
+            _startRouteRecalculationTimer();
+          } else if (_turnoEstado == 'BREAK') {
+            _isOnline = false;
+            _breakSecondsRemaining =
+                turnoData['segundos_restantes'] ??
+                10; // O 900 según tus pruebas
+
+            if (_breakSecondsRemaining > 0) {
+              // Reconstruimos la hora de inicio simulada para mantener sincronizado el reloj
+              _breakStartTime = DateTime.now().subtract(
+                Duration(seconds: 10 - _breakSecondsRemaining),
+              );
+
+              _breakTimer?.cancel();
+              _breakTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+                if (_breakStartTime != null) {
+                  final elapsed = DateTime.now()
+                      .difference(_breakStartTime!)
+                      .inSeconds;
+                  _breakSecondsRemaining =
+                      10 -
+                      elapsed; // Usar 900 si restauras a modo de producción
+                  if (_breakSecondsRemaining <= 0) {
+                    _breakSecondsRemaining = 0;
+                    _stopBreakTimer();
+                    NotificationService.showNotification(
+                      id: 999,
+                      title: "⏰ ¡Fin de tu Break de 15 min!",
+                      body:
+                          "Debes reanudar tu turno o terminar el turno de inmediato.",
+                    );
+                  }
+                  notifyListeners();
+                }
+              });
+            }
+          } else if (_turnoEstado == 'ALMUERZO') {
+            _isOnline = false;
+            _lunchSecondsRemaining = turnoData['segundos_restantes'] ?? 3600;
+
+            if (_lunchSecondsRemaining > 0) {
+              _lunchStartTime = DateTime.now().subtract(
+                Duration(seconds: 3600 - _lunchSecondsRemaining),
+              );
+
+              _lunchTimer?.cancel();
+              _lunchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+                if (_lunchStartTime != null) {
+                  final elapsed = DateTime.now()
+                      .difference(_lunchStartTime!)
+                      .inSeconds;
+                  _lunchSecondsRemaining = 3600 - elapsed;
+                  if (_lunchSecondsRemaining <= 0) {
+                    _lunchSecondsRemaining = 0;
+                    _stopLunchTimer();
+                    NotificationService.showNotification(
+                      id: 888,
+                      title: "🍔 ¡Fin de tu hora de Almuerzo!",
+                      body:
+                          "Reanuda tu turno para continuar prestando servicios.",
+                    );
+                  }
+                  notifyListeners();
+                }
+              });
+            }
+          }
+        } else {
+          _turnoEstado = 'OFFLINE';
+          _isOnline = false;
+        }
+      } catch (e) {
+        debugPrint("Error restaurando estado del turno: $e");
+        _turnoEstado = 'OFFLINE';
+        _isOnline = false;
+      }
     }
+
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
       final tripReal = await _tripRepository.getActiveTrip();
 
       if (tripReal != null && tripReal.id == savedTrip.id) {
-        // Preservamos teléfono, pasajeros y FUEC del storage local si la API remota viene simplificada
         _activeTrip = tripReal.copyWith(
           passengerPhone:
               (tripReal.passengerPhone == null ||
@@ -508,20 +1054,37 @@ class HomeProvider extends ChangeNotifier {
         );
         _isOnline = true;
         _startListeningTrips();
-
-        // --- INICIALIZACIÓN ÚNICA DE PARTIDA ---
         _passengerLocation = tripReal.originLocation;
-
         _startPassengerGpsListener(_activeTrip!.id);
-        _startRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
-
+        _startRouteRecalculationTimer();
         await _calculateRouteForCurrentStatus();
       } else {
         await _storageService.clearCurrentTrip();
         _activeTrip = null;
       }
+    } else {
+      try {
+        final tripReal = await _tripRepository.getActiveTrip();
+        if (tripReal != null) {
+          // 🚨 FILTRO: Si el viaje tiene estado SCHEDULED_ASSIGNED, lo ignoramos para que no tome el mapa al iniciar
+          if (tripReal.status.toString().contains('SCHEDULED_ASSIGNED')) {
+            _activeTrip = null;
+          } else {
+            _activeTrip = tripReal;
+            _isOnline = true;
+            await _storageService.saveCurrentTrip(_activeTrip!);
+            _startListeningTrips();
+            _passengerLocation = tripReal.originLocation;
+            _startPassengerGpsListener(_activeTrip!.id);
+            _startRouteRecalculationTimer();
+            await _calculateRouteForCurrentStatus();
+          }
+        }
+      } catch (e) {
+        debugPrint("Error buscando viaje activo de respaldo en inicio: $e");
+      }
     }
-    // 2. Permisos y GPS
+
     final hasPermission = await _locationService.checkPermissions();
     if (hasPermission) {
       final position = await _locationService.getCurrentLocation();
@@ -529,14 +1092,139 @@ class HomeProvider extends ChangeNotifier {
         _currentPosition = LatLng(position.latitude, position.longitude);
         _currentHeading = position.heading;
       }
-      _startTracking();
+      if (_isOnline) {
+        _startTracking();
+      }
     }
     _isLoading = false;
     notifyListeners();
   }
 
+  // 🟢 ACTUALIZADO: Ignora SCHEDULED_ASSIGNED al encender el turno
+  Future<String?> toggleOnlineStatus() async {
+    if (_isLoading) return null;
+
+    if (!_isOnline && _selectedVehicle == null) {
+      return "⚠️ Debes seleccionar un vehículo para conectarte.";
+    }
+
+    if (!_isOnline && _currentPosition == null) {
+      _isLoading = true;
+      notifyListeners();
+
+      final position = await _locationService.getCurrentLocation();
+      if (position != null) {
+        _currentPosition = LatLng(position.latitude, position.longitude);
+      } else {
+        _isLoading = false;
+        notifyListeners();
+        return "⚠️ No se pudo obtener tu ubicación GPS. Verifica los permisos.";
+      }
+    }
+
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      if (!_isOnline) {
+        await _checkDocumentsValidity();
+      }
+
+      final String userId = sl<AuthProvider>().user?.id ?? "0";
+
+      final bool success = await _driverRepository.toggleStatus(
+        isOnline: !_isOnline,
+        driverId: userId,
+        vehicleId: _selectedVehicle?.id,
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
+      );
+
+      if (success) {
+        _isOnline = !_isOnline;
+
+        if (_isOnline) {
+          _startListeningTrips();
+          _startTracking();
+
+          try {
+            final tripReal = await _tripRepository.getActiveTrip();
+            if (tripReal != null) {
+              // 🚨 FILTRO: Ignoramos el programado para no tomar la pantalla al conectarse
+              if (tripReal.status.toString().contains('SCHEDULED_ASSIGNED')) {
+                _activeTrip = null;
+              } else {
+                _activeTrip = tripReal;
+                await _storageService.saveCurrentTrip(_activeTrip!);
+                _passengerLocation = tripReal.originLocation;
+                _startPassengerGpsListener(_activeTrip!.id);
+                _startRouteRecalculationTimer();
+                await _calculateRouteForCurrentStatus();
+              }
+            }
+          } catch (e) {
+            debugPrint("Error buscando viaje activo al conectarse: $e");
+          }
+        } else {
+          _stopListeningTrips();
+          _stopTracking();
+          _activeTrip = null;
+          _routePoints = [];
+          await _storageService.clearCurrentTrip();
+        }
+        return null;
+      } else {
+        return "No se pudo actualizar el estado en el servidor.";
+      }
+    } catch (e) {
+      return e.toString().replaceAll("Exception: ", "");
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // 🟢 NUEVO: Inicia la ruta hacia el origen desde la lista manual de viajes programados
+  // 🟢 ACTUALIZADO Y BLINDADO: Inicia la ruta preservando toda la información detallada del viaje programado
+  Future<bool> iniciarRutaAlOrigenConViaje(Trip trip) async {
+    _isLoading = true;
+    _activeTrip =
+        trip; // 1. Cargamos de forma segura el viaje detallado en memoria
+    notifyListeners();
+
+    try {
+      final updatedTrip = await _tripRepository.updateTripStatus(
+        trip.id,
+        'ACCEPTED',
+      );
+
+      // 2. 🟢 SOLUCIÓN: En lugar de sobreescribir directo, usamos preservación blindada
+      // Esto filtra la respuesta parcial de la API y mantiene las direcciones y coordenadas reales intactas.
+      _updateActiveTripWithPreservation(updatedTrip);
+
+      await _storageService.saveCurrentTrip(_activeTrip!);
+
+      _passengerLocation = _activeTrip!.originLocation;
+      _startPassengerGpsListener(_activeTrip!.id);
+      _startRouteRecalculationTimer();
+      await _calculateRouteForCurrentStatus();
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _activeTrip = null;
+      _isLoading = false;
+      notifyListeners();
+      debugPrint("🚨 Error al iniciar ruta desde lista: $e");
+      return false;
+    }
+  }
+
   void _startTracking() {
-    _positionSubscription?.cancel();
+    _positionSubscription?.cancel().catchError((error) {
+      debugPrint("ℹ️ Silenciando reinicio de canal de GPS: $error");
+    });
     _heartbeatTimer?.cancel(); // Limpiar anterior
 
     // Timer que avisa al server cada 30 seg aunque estés quieto
@@ -552,10 +1240,25 @@ class HomeProvider extends ChangeNotifier {
     _positionSubscription = _locationService.getPositionStream().listen((pos) {
       _updatePosition(pos);
     });
+    _startNetworkMonitor();
   }
 
-  void _updatePosition(Position pos) {
+  void _updatePosition(Position pos) async {
     final newLocation = LatLng(pos.latitude, pos.longitude);
+
+    // Si la precisión del GPS es muy baja (mayor a 80 metros), alertar pérdida de señal GPS
+    if (pos.accuracy > 80.0) {
+      if (!_isGpsSignalLost) {
+        _isGpsSignalLost = true;
+        notifyListeners();
+      }
+      return; // No procesamos coordenadas inexactas para no distorsionar el mapa del pasajero
+    } else {
+      if (_isGpsSignalLost) {
+        _isGpsSignalLost = false;
+        notifyListeners();
+      }
+    }
 
     if (_currentPosition != null) {
       final Distance distance = const Distance();
@@ -565,12 +1268,12 @@ class HomeProvider extends ChangeNotifier {
         newLocation,
       );
 
-      // 1. Si está ONLINE pero NO está en un servicio, enviar posición de disponibilidad
+      // 1. Si está ONLINE pero NO está en un servicio activo
       if (_isOnline && _activeTrip == null && dist > 10.0) {
-        _driverRepository.updatePosition(pos.latitude, pos.longitude);
+        _sendPositionToBackend(pos.latitude, pos.longitude);
       }
 
-      // 2. Si está en un viaje activo, transmitir la ubicación y actualizar la ruta
+      // 2. Si está en un viaje activo, transmitir de manera resiliente
       if (_activeTrip != null) {
         final bool enServicioActivo =
             _activeTrip!.status == TripStatus.ACCEPTED ||
@@ -578,18 +1281,17 @@ class HomeProvider extends ChangeNotifier {
             _activeTrip!.status == TripStatus.STARTED;
 
         if (enServicioActivo && dist > 5.0) {
-          _tripRepository.updateLocation(
+          _sendTripLocationToBackend(
             _activeTrip!.id,
             pos.latitude,
             pos.longitude,
+            pos.speed,
           );
-
-          // --- CORRECCIÓN: Recalcular la ruta OSRM en tiempo real al avanzar ---
           _calculateRouteForCurrentStatus();
         }
       }
 
-      // --- Estabilización del ángulo del vehículo (Rumbo Vectorial) ---
+      // Estabilización del rumbo
       if (dist > 1.5) {
         _currentHeading = _calculateBearing(_currentPosition!, newLocation);
       } else if (pos.heading > 0) {
@@ -599,7 +1301,64 @@ class HomeProvider extends ChangeNotifier {
 
     _currentPosition = newLocation;
     notifyListeners();
-  } // =======================================================
+  }
+
+  // --- MÉTODOS DE ENVÍO CON TOLERANCIA A ERRORES ---
+
+  Future<void> _sendPositionToBackend(double lat, double lng) async {
+    final hasInternet = await _hasInternetConnection();
+    if (!hasInternet) {
+      _setNetworkDisconnected(true);
+      return;
+    }
+
+    try {
+      await _driverRepository.updatePosition(lat, lng);
+      _setNetworkDisconnected(false);
+    } catch (e) {
+      // El envío falló por timeout o error de red transitorio
+      _setNetworkDisconnected(true);
+    }
+  }
+
+  Future<void> _sendTripLocationToBackend(
+    String tripId,
+    double lat,
+    double lng,
+    double speed,
+  ) async {
+    final hasInternet = await _hasInternetConnection();
+    if (!hasInternet) {
+      _setNetworkDisconnected(true);
+      return;
+    }
+
+    try {
+      await _tripRepository.updateLocation(
+        tripId,
+        lat,
+        lng,
+        speed: speed,
+        bearing: _currentHeading,
+      );
+      _setNetworkDisconnected(false);
+    } catch (e) {
+      _setNetworkDisconnected(true);
+    }
+  }
+
+  void _stopTracking() {
+    _positionSubscription?.cancel().catchError((error) {
+      debugPrint("ℹ️ Silenciando canal de GPS ya inactivo: $error");
+    });
+    _positionSubscription = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _stopNetworkMonitor();
+    _setNetworkDisconnected(false);
+    _isGpsSignalLost = false;
+    notifyListeners();
+  }
 
   Future<void> loadVehicles() async {
     // BORRA O COMENTA ESTA LÍNEA:
@@ -678,75 +1437,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  Future<String?> toggleOnlineStatus() async {
-    if (_isLoading) return null;
-
-    // 1. VALIDACIÓN PREVIA DE VEHÍCULO
-    if (!_isOnline && _selectedVehicle == null) {
-      return "⚠️ Debes seleccionar un vehículo para conectarte.";
-    }
-
-    // 2. VALIDACIÓN CRÍTICA DE GPS (Evita ser invisible en Redis)
-    if (!_isOnline && _currentPosition == null) {
-      _isLoading = true;
-      notifyListeners();
-
-      // Intentamos obtener la ubicación una última vez antes de fallar
-      final position = await _locationService.getCurrentLocation();
-      if (position != null) {
-        _currentPosition = LatLng(position.latitude, position.longitude);
-      } else {
-        _isLoading = false;
-        notifyListeners();
-        return "⚠️ No se pudo obtener tu ubicación GPS. Verifica los permisos.";
-      }
-    }
-
-    _isLoading = true;
-    notifyListeners();
-
-    try {
-      // 3. Validar documentos (SOAT/Tecno) antes de conectar
-      if (!_isOnline) {
-        await _checkDocumentsValidity();
-      }
-
-      final String userId = sl<AuthProvider>().user?.id ?? "0";
-
-      // 4. Llamada al servidor enviando OBLIGATORIAMENTE las coordenadas
-      final bool success = await _driverRepository.toggleStatus(
-        isOnline: !_isOnline,
-        driverId: userId,
-        vehicleId: _selectedVehicle?.id,
-        lat:
-            _currentPosition?.latitude, // Ya garantizamos que no es null arriba
-        lng: _currentPosition?.longitude,
-      );
-
-      if (success) {
-        _isOnline = !_isOnline;
-
-        if (_isOnline) {
-          _startListeningTrips();
-          debugPrint("🟢 LISTENER DE VIAJES INICIADO");
-        } else {
-          _stopListeningTrips();
-          _activeTrip = null;
-          _routePoints = [];
-          await _storageService.clearCurrentTrip();
-        }
-        return null;
-      } else {
-        return "No se pudo actualizar el estado en el servidor.";
-      }
-    } catch (e) {
-      return e.toString().replaceAll("Exception: ", "");
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-
   // =======================================================
   // D. GESTIÓN DE VIAJES (CICLO DE VIDA)
   // =======================================================
@@ -762,17 +1452,20 @@ class HomeProvider extends ChangeNotifier {
   }
 
   // En tu HomeProvider.dart, localiza _startListeningTrips y añade el punto "."
+  // 🟢 BLINDAJE EXTREMO: Si el Socket envía una señal parcial, consulta de inmediato a la API de respaldo
+  // 🟢 COMPLETAMENTE BLINDADO: Si el Socket envía datos parciales, hidrata de inmediato consultando a la API
   void _startListeningTrips() {
     _tripSubscription?.cancel();
 
-    _tripSubscription = _tripRepository.listenForTrips().listen((trip) {
+    _tripSubscription = _tripRepository.listenForTrips().listen((trip) async {
       try {
         debugPrint("📡 [SOCKET] Evento: ${trip.status} para viaje ${trip.id}");
-        // ignore: unrelated_type_equality_checks
-        if (trip.status == 'NO_DISPONIBLE' && _incomingTrip?.id == trip.id) {
+
+        if (trip.status.name == 'NO_DISPONIBLE' &&
+            _incomingTrip?.id == trip.id) {
           debugPrint("🧹 [SOCKET] Limpiando alerta: viaje tomado por otro.");
           _incomingTrip = null;
-          notifyListeners(); // Esto le dirá a Flutter que reconstruya la UI sin el modal
+          notifyListeners();
           return;
         }
 
@@ -784,11 +1477,19 @@ class HomeProvider extends ChangeNotifier {
         }
 
         if (trip.status == TripStatus.ACCEPTED) {
-          _updateActiveTripWithPreservation(trip);
+          // 🟢 BLINDAJE: Si el viaje que llega por Socket es parcial (dirección o pasajeros vacíos)
+          // consultamos inmediatamente al servidor para obtener el objeto completo y detallado.
+          if (trip.originAddress == 'Origen...' || trip.passengers.isEmpty) {
+            final fullTrip = await _tripRepository.getActiveTrip();
+            if (fullTrip != null) {
+              _updateActiveTripWithPreservation(fullTrip);
+            }
+          } else {
+            _updateActiveTripWithPreservation(trip);
+          }
           _incomingTrip = null;
           notifyListeners();
         } else if (trip.status == TripStatus.PENDING) {
-          // BLINDAJE: Si es el mismo viaje que acabamos de rechazar, ignoramos el evento
           if (_lastRejectedTripId == trip.id) {
             debugPrint(
               "⚠️ [SOCKET] Ignorando evento PENDING de viaje recientemente rechazado.",
@@ -800,7 +1501,6 @@ class HomeProvider extends ChangeNotifier {
           _incomingTrip = trip;
           calculateIncomingTripRoute();
 
-          // BLINDAJE: Verificamos que el viaje tenga datos mínimos antes de notificar
           if (_incomingTrip != null) {
             _startValidationTimer(
               _incomingTrip!.assignmentId ?? _incomingTrip!.id,
@@ -810,7 +1510,7 @@ class HomeProvider extends ChangeNotifier {
         }
       } catch (e, stackTrace) {
         debugPrint("🚨 [CRITICO] Error procesando evento de socket: $e");
-        debugPrint(stackTrace.toString()); // Esto nos dirá qué widget colapsó
+        debugPrint(stackTrace.toString());
       }
     });
   }
@@ -855,7 +1555,7 @@ class HomeProvider extends ChangeNotifier {
       _passengerLocation = acceptedTrip.originLocation;
 
       _startPassengerGpsListener(_activeTrip!.id);
-      _startRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
+      _startRouteRecalculationTimer();
 
       notifyListeners();
 
@@ -864,8 +1564,34 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint("Error al aceptar viaje: $e");
       _isLoading = false;
+
+      // --- SOLUCIÓN: EXTRAER Y MOSTRAR EL ERROR REAL DEL SERVIDOR ---
+      String mensajeAMostrar = "No se pudo aceptar el viaje. Intenta de nuevo.";
+
+      // Si tu repositorio usa Dio, puedes extraer el mensaje JSON del backend así:
+      // (Ajusta esto según la librería HTTP que uses, por ejemplo, e.response?.data['message'])
+      final errorString = e.toString();
+      if (errorString.contains("saldo") ||
+          errorString.contains("bajo") ||
+          errorString.contains("Recarga")) {
+        mensajeAMostrar = "Tu saldo es muy bajo. Recarga para continuar.";
+      } else {
+        // Limpiamos prefijos comunes si es una excepción personalizada
+        mensajeAMostrar = errorString.replaceAll("Exception:", "").trim();
+      }
+
+      // Disparar la alerta visual en el front
+      _showError(mensajeAMostrar);
+
       notifyListeners();
     }
+  }
+
+  /// Retorna si el viaje activo actual en el conductor es programado.
+  bool get isActiveTripScheduled {
+    if (_activeTrip == null) return false;
+    // Un viaje es programado si tiene fecha asignada en 'scheduledAt'
+    return _activeTrip!.scheduledAt != null;
   }
 
   Future<void> rejectIncomingTrip() async {
@@ -889,6 +1615,77 @@ class HomeProvider extends ChangeNotifier {
       const Duration(seconds: 5),
       () => _lastRejectedTripId = null,
     );
+  }
+
+  /// 🟢 NUEVO: Inicia la ruta hacia el origen del pasajero (Cambia de SCHEDULED_ASSIGNED a ACCEPTED)
+  Future<void> iniciarRutaAlOrigen() async {
+    if (_activeTrip == null) return;
+
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      // Cambiamos el estado a ACCEPTED (Esto avisa al pasajero en tiempo real que vamos en camino)
+      await _updateTripStatus('ACCEPTED');
+    } catch (e) {
+      debugPrint("🚨 Error al iniciar ruta al origen: $e");
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 🟢 ACTUALIZADO: Intenta activar el viaje programado ingresando el PIN (Pasa de ARRIVED a STARTED)
+  Future<bool> activarViajeProgramado(String pin) async {
+    if (_activeTrip == null || _currentPosition == null) return false;
+
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final dio = ApiClient().dio;
+
+      final response = await dio.post(
+        '/conductor/viajes/activar-programado',
+        data: {
+          'codigo_activacion': pin,
+          'lat': _currentPosition!.latitude,
+          'lng': _currentPosition!.longitude,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data['status'] == 'success') {
+        // Obtenemos el viaje actualizado desde el servidor (ahora en estado STARTED)
+        final tripReal = await _tripRepository.getActiveTrip();
+
+        if (tripReal != null) {
+          _activeTrip = tripReal;
+
+          // Guardamos en memoria local
+          await _storageService.saveCurrentTrip(_activeTrip!);
+
+          // 🟢 LIMPIEZA: Como el pasajero ya abordó, detenemos el rastreo de su celular en tiempo real
+          _passengerLocation = null;
+          _stopPassengerGpsListener();
+
+          _startRouteRecalculationTimer();
+          await _calculateRouteForCurrentStatus();
+
+          _isLoading = false;
+          notifyListeners();
+          return true;
+        }
+      }
+
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      debugPrint("🚨 Error activando viaje programado: $e");
+      rethrow;
+    }
   }
 
   PusherChannelsClient? _passengerPusherClient;
@@ -1152,6 +1949,7 @@ class HomeProvider extends ChangeNotifier {
 
   /// Cierre definitivo tras confirmación de pago
   // Añadimos el parámetro Trip? updatedTrip
+  /// Cierre definitivo tras confirmación de pago
   Future<void> _finalizeTripWithWallet(
     BuildContext context,
     Trip? updatedTrip,
@@ -1174,29 +1972,6 @@ class HomeProvider extends ChangeNotifier {
           context,
           listen: false,
         ).addFinishedTrip(_activeTrip!);
-
-        // 2. Mi mejora: Formateamos la ganancia dinámica que viene del Backend
-        final String gananciaFormateada = _activeTrip!.driverRevenue
-            .toStringAsFixed(0)
-            .replaceAllMapped(
-              RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-              (Match m) => '${m[1]}.',
-            );
-
-        // 3. Mostramos el SnackBar corregido
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "Viaje finalizado. Tu ganancia neta: \$$gananciaFormateada",
-            ),
-            backgroundColor: Colors.green[800],
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        );
       }
       _finishTrip();
     } catch (e) {
@@ -1249,10 +2024,11 @@ class HomeProvider extends ChangeNotifier {
     debugPrint("DEBUG: _finishTrip ejecutado.");
 
     _stopPassengerGpsListener();
-    _stopRouteRecalculationTimer();
+    _stopRouteRecalculationTimer(); // 🟢 Corrección aquí (añadir "ion")
 
     _activeTrip = null;
     _routePoints = [];
+    _extraWaitingTimeAdded = false; // Reset al finalizar
 
     _storageService.clearCurrentTrip();
     _startListeningTrips();
@@ -1406,12 +2182,14 @@ class HomeProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _positionSubscription?.cancel();
+    _positionSubscription?.cancel().catchError((e) => null);
     _tripSubscription?.cancel();
     _heartbeatTimer?.cancel();
-    _stopPassengerGpsListener(); // <--- AGREGUE ESTA LÍNEA AQUÍ
-    _stopRouteRecalculationTimer(); // <--- AGREGADO AQUÍ
-
+    _stopPassengerGpsListener();
+    _stopRouteRecalculationTimer();
+    _waitTimer?.cancel(); // 🟢 Cancelar timer al destruir el provider
+    _breakTimer?.cancel(); // <--- AGREGAR ESTA LÍNEA AQUÍ
+    _stopNetworkMonitor();
     super.dispose();
   }
 }

@@ -1,11 +1,13 @@
+// lib/core/models/trip_model.dart
+
 // ignore_for_file: constant_identifier_names
 import 'dart:convert';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import '../enums/payment_enums.dart';
 
 enum TripStatus {
   PENDING,
-
   REQUESTED,
   ACCEPTED,
   ARRIVED,
@@ -14,12 +16,13 @@ enum TripStatus {
   PAYMENT_PENDING,
   COMPLETED,
   CANCELLED,
+  SCHEDULED_ASSIGNED,
 }
 
 class Passenger {
   final String name;
   final String nationalId;
-  final String documentType; // CC, CE, TI, etc.
+  final String documentType;
   final String? phone;
 
   Passenger({
@@ -56,7 +59,7 @@ class Trip {
   final String? contractId;
   final String? companyId;
   final List<Passenger> passengers;
-  final double price;
+  final double price; // Tarifa base original
   final double driverRevenue;
   final double platformFee;
   final String originAddress;
@@ -66,13 +69,17 @@ class Trip {
   final DateTime date;
   final double distanceKm;
   final double duration;
-  final String?
-  passengerPhone; // <--- NUEVO CAMPO PARA GUARDAR EL TELÉFONO DE LA BD
+  final String? passengerPhone;
 
   final TripStatus status;
   final PaymentMethod paymentMethod;
   final String? fuecUrl;
   final Map<String, dynamic>? legalSnapshot;
+  final DateTime? scheduledAt;
+
+  // 🏷️ NUEVOS CAMPOS DE DESCUENTO (CONDUCTOR)
+  final String? promotionId;
+  final double discount;
 
   Trip({
     required this.id,
@@ -90,16 +97,44 @@ class Trip {
     required this.destinationLocation,
     required this.distanceKm,
     required this.duration,
-    this.passengerPhone, // <--- INICIALIZACIÓN
-
+    this.passengerPhone,
     this.status = TripStatus.REQUESTED,
     this.paymentMethod = PaymentMethod.CASH,
     this.fuecUrl,
     this.legalSnapshot,
+    this.scheduledAt,
+    this.promotionId,
+    this.discount = 0.0,
   });
 
   String get passengerName =>
       passengers.isNotEmpty ? passengers.first.name : "Usuario";
+
+  // --- GETTERS EXCLUSIVOS PARA CONDUCTOR (TRANSPARENCIA) ---
+  bool get hasDiscount => discount > 0.0;
+
+  // Lo que el pasajero debe pagar físicamente en efectivo
+  double get passengerCashToPay => price - discount;
+
+  String get formattedPrice {
+    final currency = NumberFormat("#,##0", "es_CO");
+    return "\$ ${currency.format(price)}";
+  }
+
+  String get formattedPassengerCashToPay {
+    final currency = NumberFormat("#,##0", "es_CO");
+    return "\$ ${currency.format(passengerCashToPay)}";
+  }
+
+  String get formattedDiscount {
+    final currency = NumberFormat("#,##0", "es_CO");
+    return "\$ ${currency.format(discount)}";
+  }
+
+  String get formattedDriverRevenue {
+    final currency = NumberFormat("#,##0", "es_CO");
+    return "\$ ${currency.format(driverRevenue)}";
+  }
 
   Trip copyWith({
     String? id,
@@ -116,13 +151,14 @@ class Trip {
     LatLng? destinationLocation,
     double? distanceKm,
     double? duration,
-    String? passengerPhone, // <--- SOPORTE COPYWITH
-
+    String? passengerPhone,
     TripStatus? status,
     PaymentMethod? paymentMethod,
-    String? fuecUrl, // <--- AGREGADO AQUÍ
-
+    String? fuecUrl,
     Map<String, dynamic>? legalSnapshot,
+    DateTime? scheduledAt,
+    String? promotionId,
+    double? discount,
   }) {
     return Trip(
       id: id ?? this.id,
@@ -139,13 +175,14 @@ class Trip {
       destinationLocation: destinationLocation ?? this.destinationLocation,
       distanceKm: distanceKm ?? this.distanceKm,
       duration: duration ?? this.duration,
-      passengerPhone: passengerPhone ?? this.passengerPhone, // <--- RETORNO
-
+      passengerPhone: passengerPhone ?? this.passengerPhone,
       status: status ?? this.status,
       paymentMethod: paymentMethod ?? this.paymentMethod,
-      fuecUrl: fuecUrl ?? this.fuecUrl, // <--- AGREGADO AQUÍ
-
+      fuecUrl: fuecUrl ?? this.fuecUrl,
       legalSnapshot: legalSnapshot ?? this.legalSnapshot,
+      scheduledAt: scheduledAt ?? this.scheduledAt,
+      promotionId: promotionId ?? this.promotionId,
+      discount: discount ?? this.discount,
     );
   }
 
@@ -170,7 +207,6 @@ class Trip {
       map['estado'] ?? map['status'],
     );
 
-    // --- EXTRACTOR DE TELÉFONO DE PASAJERO MULTICAPA A PRUEBA DE FALLOS ---
     String? extractedPhone;
     try {
       if (map['telefono_pasajero'] != null) {
@@ -241,8 +277,7 @@ class Trip {
             0.0,
       ),
 
-      passengerPhone:
-          extractedPhone, // <--- ALMACENAMIENTO DE TELÉFONO DE LA BD
+      passengerPhone: extractedPhone,
 
       status: calculatedStatus,
       paymentMethod: _parsePaymentMethod(map['metodo_pago']),
@@ -278,6 +313,17 @@ class Trip {
         'porcentaje_comision': checkDouble(desglose['porcentaje_aplicado']),
         ...(map['snapshot_legal'] is Map ? map['snapshot_legal'] : {}),
       },
+      scheduledAt: (v['programado_para'] ?? map['programado_para']) != null
+          ? DateTime.parse(
+              (v['programado_para'] ?? map['programado_para']).toString(),
+            ).toLocal()
+          : null,
+
+      // Mapeo de descuentos en Conductor
+      promotionId: (map['id_promocion'] ?? v['id_promocion'])?.toString(),
+      discount: checkDouble(
+        map['monto_descuento'] ?? v['monto_descuento'] ?? 0.0,
+      ),
     );
   }
 
@@ -294,6 +340,8 @@ class Trip {
     if (s == 'INICIADO' || s == 'STARTED') return TripStatus.STARTED;
     if (s == 'FINALIZADO' || s == 'COMPLETED') return TripStatus.COMPLETED;
     if (s == 'CANCELADO' || s == 'CANCELLED') return TripStatus.CANCELLED;
+
+    if (s == 'SCHEDULED_ASSIGNED') return TripStatus.SCHEDULED_ASSIGNED;
 
     try {
       return TripStatus.values.byName(s);

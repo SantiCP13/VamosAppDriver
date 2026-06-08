@@ -1,3 +1,5 @@
+// lib/features/home/widgets/side_menu.dart
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -8,10 +10,12 @@ import '../../home/providers/home_provider.dart';
 import '../../wallet/providers/wallet_provider.dart';
 import '../../wallet/screens/wallet_screen.dart';
 import '../../history/screens/trip_history_screen.dart';
+import '../../history/screens/scheduled_trips_screen.dart';
+import '../../history/providers/history_provider.dart';
 import '../../profile/screens/profile_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
 import '../../home/screens/support_screen.dart';
-import '../../../core/models/user_model.dart'; // Asegúrate de tener el modelo importado
+import '../../../core/models/user_model.dart';
 
 class SideMenu extends StatefulWidget {
   const SideMenu({super.key});
@@ -27,8 +31,149 @@ class _SideMenuState extends State<SideMenu> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         context.read<WalletProvider>().loadWalletData(force: true);
+        context.read<HistoryProvider>().loadHistory(forceRefresh: true);
       }
     });
+  }
+
+  Map<String, dynamic>? _getCompanyOrConvenio(
+    User? user,
+    HomeProvider homeProvider,
+  ) {
+    final vehicle = homeProvider.selectedVehicle;
+    if (vehicle == null) return null;
+
+    final dynamic v = vehicle;
+    Map<String, dynamic>? vehicleMap;
+
+    try {
+      if (v.toMap() != null) {
+        vehicleMap = Map<String, dynamic>.from(v.toMap());
+      }
+    } catch (_) {
+      try {
+        if (v.toJson() != null) {
+          vehicleMap = Map<String, dynamic>.from(v.toJson());
+        }
+      } catch (_) {}
+    }
+
+    String? extractRazonSocial(dynamic companyObj) {
+      if (companyObj == null) return null;
+      if (companyObj is Map) {
+        return companyObj['razon_social']?.toString() ??
+            companyObj['razonSocial']?.toString();
+      }
+      try {
+        final dynamic co = companyObj;
+        return co.razonSocial?.toString() ?? co.razon_social?.toString();
+      } catch (_) {}
+      return null;
+    }
+
+    bool enConvenio = false;
+    try {
+      enConvenio =
+          v.enConvenio ??
+          v.en_convenio ??
+          (vehicleMap != null &&
+              (vehicleMap['en_convenio'] == true ||
+                  vehicleMap['enConvenio'] == true));
+    } catch (_) {}
+
+    if (enConvenio) {
+      dynamic empresaConvenioObj;
+      try {
+        empresaConvenioObj = v.empresaConvenio ?? v.empresa_convenio;
+      } catch (_) {}
+      empresaConvenioObj ??=
+          vehicleMap?['empresa_convenio'] ?? vehicleMap?['empresaConvenio'];
+
+      final String? nombreConvenio = extractRazonSocial(empresaConvenioObj);
+      if (nombreConvenio != null && nombreConvenio.trim().isNotEmpty) {
+        return {'text': nombreConvenio, 'isConvenio': true};
+      }
+    }
+
+    dynamic empresaTransporteObj;
+    try {
+      empresaTransporteObj = v.empresaTransporte ?? v.empresa_transporte;
+    } catch (_) {}
+    empresaTransporteObj ??=
+        vehicleMap?['empresa_transporte'] ?? vehicleMap?['empresaTransporte'];
+
+    final String? nombreEmpresa = extractRazonSocial(empresaTransporteObj);
+    if (nombreEmpresa != null && nombreEmpresa.trim().isNotEmpty) {
+      return {'text': nombreEmpresa, 'isConvenio': false};
+    }
+
+    if (user != null) {
+      try {
+        final dynamic du = user;
+        if (du.empresa != null && du.empresa.toString().trim().isNotEmpty) {
+          return {'text': du.empresa.toString(), 'isConvenio': false};
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  Widget _buildCompanyBadge(User? user, HomeProvider homeProvider) {
+    final Map<String, dynamic>? data = _getCompanyOrConvenio(
+      user,
+      homeProvider,
+    );
+
+    if (data == null) {
+      return const SizedBox.shrink();
+    }
+
+    final String text = data['text'] as String;
+    final bool isConvenio = data['isConvenio'] as bool;
+
+    final Color badgeColor = isConvenio
+        ? Colors.blueAccent
+        : AppColors.primaryGreen;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: badgeColor.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: badgeColor.withValues(alpha: 0.25),
+          width: 1.2,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isConvenio ? Icons.handshake_rounded : Icons.business_rounded,
+            color: badgeColor,
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              isConvenio
+                  ? "CONVENIO: ${text.toUpperCase()}"
+                  : text.toUpperCase(),
+              style: GoogleFonts.montserrat(
+                color: badgeColor,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -36,11 +181,17 @@ class _SideMenuState extends State<SideMenu> {
     final authProvider = context.watch<AuthProvider>();
     final homeProvider = context.watch<HomeProvider>();
     final walletProvider = context.watch<WalletProvider>();
+    final historyProvider = context.watch<HistoryProvider>();
 
-    final User? user = authProvider.user; // Tipo explícito
+    final int scheduledCount = historyProvider.history.where((t) {
+      final statusStr = t.status.toString().toUpperCase();
+      return statusStr.contains('SCHEDULED_ASSIGNED') ||
+          statusStr.contains('PENDING_SCHEDULED');
+    }).length;
+
+    final User? user = authProvider.user;
     final String nombreMostrar = user?.name ?? "Conductor";
 
-    // Si no quieres borrar 'inicial', úsala en el child del CircleAvatar como en el ejemplo
     final String inicial = nombreMostrar.isNotEmpty
         ? nombreMostrar[0].toUpperCase()
         : "C";
@@ -70,7 +221,7 @@ class _SideMenuState extends State<SideMenu> {
                   child: ListView(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 20,
-                      vertical: 30,
+                      vertical: 20,
                     ),
                     children: [
                       _buildMenuItem(
@@ -82,6 +233,12 @@ class _SideMenuState extends State<SideMenu> {
                         Icons.account_balance_wallet_outlined,
                         "Mi Billetera",
                         const WalletScreen(),
+                      ),
+                      _buildMenuItem(
+                        Icons.event_note_rounded,
+                        "Viajes Programados",
+                        const ScheduledTripsScreen(),
+                        badgeCount: scheduledCount,
                       ),
                       _buildMenuItem(
                         Icons.history_rounded,
@@ -109,13 +266,14 @@ class _SideMenuState extends State<SideMenu> {
     );
   }
 
-  // Agregamos tipos explícitos (User?, HomeProvider, WalletProvider, String)
   Widget _buildHeader(
     User? user,
     HomeProvider homeProvider,
     WalletProvider walletProvider,
     String inicial,
   ) {
+    final bool tieneTurnoActivo = homeProvider.isOnline;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(25, 40, 25, 20),
       child: Column(
@@ -157,10 +315,25 @@ class _SideMenuState extends State<SideMenu> {
             ),
           ),
           const SizedBox(height: 4),
+
           Text(
-            homeProvider.selectedVehicle?.plate ?? "Vehículo no asignado",
-            style: GoogleFonts.poppins(fontSize: 12, color: Colors.white54),
+            tieneTurnoActivo
+                ? (homeProvider.selectedVehicle?.plate ??
+                      "Vehículo no asignado")
+                : "Sin turno activo",
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              color: tieneTurnoActivo
+                  ? Colors.white54
+                  : Colors.redAccent.withValues(alpha: 0.8),
+              fontWeight: tieneTurnoActivo
+                  ? FontWeight.normal
+                  : FontWeight.bold,
+            ),
           ),
+
+          if (tieneTurnoActivo) _buildCompanyBadge(user, homeProvider),
+
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -202,35 +375,79 @@ class _SideMenuState extends State<SideMenu> {
     );
   }
 
-  Widget _buildMenuItem(IconData icon, String title, Widget screen) {
-    return ListTile(
-      onTap: () {
-        Navigator.pop(context);
-        Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
-      },
-      leading: Icon(icon, color: Colors.white60, size: 22),
-      title: Text(
-        title,
-        style: GoogleFonts.poppins(
-          color: Colors.white70,
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
+  Widget _buildMenuItem(
+    IconData icon,
+    String title,
+    Widget screen, {
+    int? badgeCount,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: ListTile(
+        onTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: Colors.white60, size: 20),
         ),
+        title: Text(
+          title,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (badgeCount != null && badgeCount > 0)
+              Container(
+                margin: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primaryGreen.withValues(alpha: 0.25),
+                      blurRadius: 6,
+                    ),
+                  ],
+                ),
+                child: Text(
+                  "$badgeCount",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: Colors.white24,
+              size: 20,
+            ),
+          ],
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
-      trailing: const Icon(
-        Icons.chevron_right_rounded,
-        color: Colors.white24,
-        size: 20,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
   }
 
   Widget _buildLogoutSection(AuthProvider authProvider) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(25, 0, 25, 40),
-      child: TextButton.icon(
-        onPressed: () async {
+      padding: const EdgeInsets.fromLTRB(25, 0, 25, 30),
+      child: InkWell(
+        onTap: () async {
           await authProvider.logout();
           if (!mounted) return;
           Navigator.pushAndRemoveUntil(
@@ -239,16 +456,31 @@ class _SideMenuState extends State<SideMenu> {
             (r) => false,
           );
         },
-        icon: const Icon(
-          Icons.logout_rounded,
-          color: Colors.redAccent,
-          size: 20,
-        ),
-        label: Text(
-          "Cerrar Sesión",
-          style: GoogleFonts.montserrat(
-            color: Colors.redAccent,
-            fontWeight: FontWeight.w600,
+        borderRadius: BorderRadius.circular(15),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.red.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.logout_rounded,
+                color: Colors.redAccent,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                "Cerrar Sesión",
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.redAccent,
+                  fontSize: 14,
+                ),
+              ),
+            ],
           ),
         ),
       ),
