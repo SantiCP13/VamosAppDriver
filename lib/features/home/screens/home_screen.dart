@@ -19,6 +19,12 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../core/utils/cached_tile_provider.dart';
 import 'dart:io'; // <--- Permite usar el tipo 'File' para la foto tomada
 import 'package:image_picker/image_picker.dart'; // <--- Permite abrir la cámara nativa del teléfono
+// ... Asegúrese de tener estas importaciones al inicio del archivo ...
+import 'dart:async'; // 🟢 Requerido para StreamSubscription
+import 'package:dart_pusher_channels/dart_pusher_channels.dart'; // 🟢 Requerido para Sockets
+import '../../../core/services/storage_service.dart'; // 🟢 NUEVA IMPORTACIÓN
+import '../../../core/di/injection_container.dart'
+    as di; // 🟢 NUEVA IMPORTACIÓN
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -55,6 +61,8 @@ class _HomeScreenState extends State<HomeScreen>
     _homeProvider = Provider.of<HomeProvider>(context, listen: false);
   }
 
+  StreamSubscription? _shiftSocketSubscription;
+  PusherChannelsClient? _shiftPusherClient;
   @override
   void initState() {
     super.initState();
@@ -69,11 +77,98 @@ class _HomeScreenState extends State<HomeScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
+    WidgetsBinding.instance.addObserver(this);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<HomeProvider>().initLocation();
       context.read<WalletProvider>().loadWalletData();
       context.read<HomeProvider>().addListener(_onTripStateChanged);
+
+      _initShiftSocket();
     });
+  }
+
+  // 🟢 NUEVO MÉTODO: Sincroniza el estado del turno cuando el conductor regresa a la app
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint(
+        "📡 [Lifecycle] Conductor regresó a la app. Sincronizando turno...",
+      );
+      context.read<HomeProvider>().verificarTurnoActivoConServidor();
+    }
+  }
+
+  // 🟢 NUEVO MÉTODO: Conexión al WebSocket de Reverb para el turno
+  void _initShiftSocket() async {
+    final user = DriverAuthService().currentUser;
+    if (user == null) return;
+
+    final storage = di.sl<StorageService>();
+    final token = await storage.getToken();
+    if (token == null) return;
+
+    try {
+      final options = PusherChannelsOptions.fromHost(
+        scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss',
+        host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
+        port: int.parse(dotenv.env['REVERB_PORT'] ?? '443'),
+        key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
+      );
+
+      _shiftPusherClient = PusherChannelsClient.websocket(
+        options: options,
+        connectionErrorHandler: (exception, trace, client) {
+          debugPrint("❌ SOCKET TURNO Error: $exception");
+        },
+      );
+
+      // Canal privado para el conductor mapeado en channels.php
+      final channel = _shiftPusherClient!.privateChannel(
+        "conductor.${user.id}",
+        authorizationDelegate:
+            EndpointAuthorizableChannelTokenAuthorizationDelegate.forPrivateChannel(
+              authorizationEndpoint: Uri.parse(
+                "https://api.vamosapp.com.co/broadcasting/auth",
+              ),
+              headers: {
+                "Authorization": "Bearer $token",
+                "Accept": "application/json",
+              },
+            ),
+      );
+
+      // Escuchar el evento de cambio de estado
+      _shiftSocketSubscription = channel
+          .bind("App\\Events\\TurnoEstadoActualizadoEvent")
+          .listen((event) {
+            debugPrint("✅ SOCKET TURNO: Se recibió actualización de turno.");
+
+            // Ponemos al conductor inactivo localmente
+            _handleShiftForceOffline();
+          });
+
+      _shiftPusherClient!.connect();
+    } catch (e) {
+      debugPrint("❌ Error al conectar socket del turno: $e");
+    }
+  }
+
+  // 🟢 NUEVA FUNCIÓN: Cambia el estado a offline y muestra alerta
+  void _handleShiftForceOffline() {
+    if (!mounted) return;
+
+    // Cambiamos el estado en el HomeProvider a 'OFFLINE'
+    context.read<HomeProvider>().forzarEstadoOffline();
+
+    // Mostramos un mensaje explicativo sin sacarlo de su sesión
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("⚠️ Tu turno ha sido finalizado por el administrador."),
+        backgroundColor: Colors.orangeAccent,
+        duration: Duration(seconds: 4),
+      ),
+    );
   }
 
   void _onTripStateChanged() {
@@ -290,6 +385,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    _shiftSocketSubscription?.cancel();
+    _shiftPusherClient?.disconnect();
     _homeProvider.removeListener(_onTripStateChanged);
     WidgetsBinding.instance.removeObserver(this);
     _mapController.dispose();
@@ -2148,9 +2245,46 @@ class _HomeScreenState extends State<HomeScreen>
                 children: [
                   TileLayer(
                     urlTemplate:
-                        'https://api.mapbox.com/styles/v1/mapbox/navigation-night-v1/tiles/{z}/{x}/{y}{r}?access_token=$myMapboxToken',
+                        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                    subdomains: const ['a', 'b', 'c', 'd'],
                     tileProvider: CachedTileProvider(),
                     retinaMode: true,
+                    maxNativeZoom: 18,
+                    minNativeZoom: 10,
+
+                    // 🟢 OPTIMIZACIONES EXCLUSIVAS PARA VELOCIDAD EN REDES MÓVILES
+                    keepBuffer:
+                        1, // Mantiene solo 1 nivel de zoom anterior en memoria (Ahorra RAM)
+                    panBuffer:
+                        0, // 🟢 CLAVE: No descarga imágenes fuera de la pantalla, cargando lo visible al instante
+                    // Filtro de color calibrado para los textos y las calles
+                    tileBuilder: (context, tileWidget, tile) {
+                      return ColorFiltered(
+                        colorFilter: const ColorFilter.matrix([
+                          2.2,
+                          0.0,
+                          0.0,
+                          0.0,
+                          35.0,
+                          0.0,
+                          2.2,
+                          0.0,
+                          0.0,
+                          35.0,
+                          0.0,
+                          0.0,
+                          2.2,
+                          0.0,
+                          35.0,
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0,
+                          0.0,
+                        ]),
+                        child: tileWidget,
+                      );
+                    },
                   ),
                   if (pointsToDraw.isNotEmpty && incoming == null && !isArrived)
                     PolylineLayer(
@@ -2302,7 +2436,6 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// Abre el modal interactivo para ingresar el kilometraje, capturar la foto del tablero y comprobantes de pago/gasto opcionales
-  /// Abre el modal interactivo para ingresar el kilometraje, capturar la foto del tablero y comprobantes de pago/gasto opcionales
   void _showShiftFormModal({
     required BuildContext context,
     required HomeProvider provider,
@@ -2326,13 +2459,13 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setModalState) {
+          builder: (BuildContext modalCtx, StateSetter setModalState) {
             return Padding(
               padding: EdgeInsets.fromLTRB(
                 24,
                 20,
                 24,
-                MediaQuery.of(context).viewInsets.bottom +
+                MediaQuery.of(modalCtx).viewInsets.bottom +
                     30, // Margen de seguridad para el teclado
               ),
               child: SingleChildScrollView(
@@ -2471,13 +2604,11 @@ class _HomeScreenState extends State<HomeScreen>
                     const SizedBox(height: 20),
 
                     // 🟢 3. SECCIÓN RE-DISEÑADA DE COMPROBANTES DE FACTURAS (SOLO AL TERMINAR TURNO)
-                    // 🟢 CORREGIDO: Envolver en un bloque seguro para evitar desbordamientos en pantallas pequeñas o fuentes escaladas
                     if (!isStarting) ...[
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Expanded(
-                            // 🟢 SOLUCIÓN AL OVERFLOW: Obliga al texto a ajustarse al espacio disponible
                             child: Text(
                               "COMPROBANTES Y FACTURAS (OPCIONAL)",
                               style: GoogleFonts.montserrat(
@@ -2487,14 +2618,11 @@ class _HomeScreenState extends State<HomeScreen>
                                 letterSpacing: 1.1,
                               ),
                               maxLines: 1,
-                              overflow: TextOverflow
-                                  .ellipsis, // Si no cabe, añade puntos suspensivos (...)
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           if (comprobantesCargados.isNotEmpty) ...[
-                            const SizedBox(
-                              width: 8,
-                            ), // Separador mínimo de seguridad
+                            const SizedBox(width: 8),
                             Text(
                               "${comprobantesCargados.length} adjuntado(s)",
                               style: GoogleFonts.poppins(
@@ -2641,12 +2769,11 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
 
-                      // 🟢 VISTA PREVIA PREMIUM DE COMPROBANTES CARGADOS (CON IMAGEN REAL, VALOR Y BOTÓN CERRAR)
+                      // VISTA PREVIA PREMIUM DE COMPROBANTES CARGADOS
                       if (comprobantesCargados.isNotEmpty) ...[
                         const SizedBox(height: 14),
                         SizedBox(
-                          height:
-                              100, // Alto ideal para visualizar miniaturas verticales
+                          height: 100,
                           child: ListView.builder(
                             scrollDirection: Axis.horizontal,
                             physics: const BouncingScrollPhysics(),
@@ -2654,7 +2781,6 @@ class _HomeScreenState extends State<HomeScreen>
                             itemBuilder: (ctx, i) {
                               return Stack(
                                 children: [
-                                  // Miniatura física de la foto cargada (screenshots)
                                   Container(
                                     width: 80,
                                     height: 80,
@@ -2677,7 +2803,6 @@ class _HomeScreenState extends State<HomeScreen>
                                       ),
                                     ),
                                   ),
-                                  // Etiqueta flotante semitransparente con el monto
                                   Positioned(
                                     bottom: 14,
                                     left: 4,
@@ -2704,7 +2829,6 @@ class _HomeScreenState extends State<HomeScreen>
                                       ),
                                     ),
                                   ),
-                                  // Botón circular rojo flotante para remover comprobante
                                   Positioned(
                                     right: 4,
                                     top: 2,
@@ -2781,28 +2905,96 @@ class _HomeScreenState extends State<HomeScreen>
                           Navigator.pop(ctx);
 
                           String? error;
-                          if (isStarting) {
-                            error = await provider.iniciarTurnoCompleto(
-                              kilometraje: mileage,
-                              foto: selectedPhoto!,
+
+                          // 🟢 ENVOLVEMOS LAS PETICIONES EN UN TRY-CATCH SEGURO
+                          try {
+                            if (isStarting) {
+                              debugPrint(
+                                "API_DEBUG_FRONT: Iniciando llamada asíncrona a iniciarTurnoCompleto...",
+                              );
+                              error = await provider.iniciarTurnoCompleto(
+                                kilometraje: mileage,
+                                foto: selectedPhoto!,
+                              );
+                              debugPrint(
+                                "API_DEBUG_FRONT: iniciarTurnoCompleto finalizó. Valor devuelto -> '$error'",
+                              );
+                            } else {
+                              debugPrint(
+                                "API_DEBUG_FRONT: Iniciando llamada asíncrona a terminarTurnoCompleto...",
+                              );
+                              error = await provider.terminarTurnoCompleto(
+                                kilometraje: mileage,
+                                foto: selectedPhoto!,
+                                comprobantesFotos: comprobantesCargados,
+                                comprobantesValores: comprobantesValores,
+                              );
+                              debugPrint(
+                                "API_DEBUG_FRONT: terminarTurnoCompleto finalizó. Valor devuelto -> '$error'",
+                              );
+                            }
+                          } catch (e, stackTrace) {
+                            // Captura y limpia el mensaje en caso de excepción del Api Client
+                            error = e.toString().replaceAll("Exception: ", "");
+                            debugPrint(
+                              "API_DEBUG_FRONT: Excepción capturada en catch del front -> $e",
                             );
-                          } else {
-                            // ENVIAR COMPROBANTES Y SUS VALORES AL FINALIZAR EL TURNO
-                            error = await provider.terminarTurnoCompleto(
-                              kilometraje: mileage,
-                              foto: selectedPhoto!,
-                              comprobantesFotos: comprobantesCargados,
-                              comprobantesValores: comprobantesValores,
+                            debugPrint(
+                              "API_DEBUG_FRONT: StackTrace -> $stackTrace",
                             );
                           }
 
+                          debugPrint(
+                            "API_DEBUG_FRONT: Evaluando error final en UI -> '$error'",
+                          );
+
+                          // Modificar este bloque de evaluación de errores
+                          // Modificar este bloque de evaluación de errores
                           if (error != null && context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text("❌ $error"),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
+                            final String lowerError = error.toLowerCase();
+
+                            // 1. Detectar error de Vehículo en uso (Laravel 400)
+                            if (lowerError.contains("en uso") ||
+                                lowerError.contains("uso activo") ||
+                                lowerError.contains(
+                                  "vehículo ya está en uso",
+                                ) ||
+                                lowerError.contains("ya se encuentra en uso")) {
+                              _showShiftBlockedAlert(
+                                context,
+                                title: "Vehículo en Uso",
+                                message:
+                                    error, // Mostrará el mensaje exacto del backend
+                                icon: Icons.warning_amber_rounded,
+                                color: Colors.orangeAccent,
+                              );
+                            }
+                            // 2. Detectar error de Billetera/Saldo insuficiente (Laravel 402)
+                            else if (lowerError.contains("billetera") ||
+                                lowerError.contains("saldo") ||
+                                lowerError.contains("pendientes") ||
+                                lowerError.contains("insuficiente") ||
+                                lowerError.contains("suspendida")) {
+                              _showShiftBlockedAlert(
+                                context,
+                                title: "Cuenta Suspendida",
+                                message:
+                                    error, // Mostrará la explicación del saldo
+                                icon: Icons.account_balance_wallet_rounded,
+                                color: Colors.redAccent,
+                              );
+                            }
+                            // 3. 🟢 Cualquier otro error del backend (como SOAT vencido, licencia vencida, etc.)
+                            else {
+                              _showShiftBlockedAlert(
+                                context,
+                                title: "Acceso Restringido",
+                                message:
+                                    error, // Muestra dinámicamente el mensaje enviado por Laravel
+                                icon: Icons.lock_outline_rounded,
+                                color: Colors.redAccent,
+                              );
+                            }
                           } else if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -2834,6 +3026,81 @@ class _HomeScreenState extends State<HomeScreen>
           },
         );
       },
+    );
+  }
+
+  // 🟢 ALERTA DINÁMICA DE BLOQUEO DE TURNO (Maneja múltiples tipos de errores)
+  void _showShiftBlockedAlert(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required IconData icon,
+    required Color color,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: const Color(0xFF1F2937),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 40),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  color: Colors.grey[300],
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    "ENTENDIDO",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

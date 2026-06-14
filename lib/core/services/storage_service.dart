@@ -1,32 +1,89 @@
+// lib/core/services/storage_service.dart
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart'; // Para debugPrint
 import '../models/trip_model.dart';
 
 class StorageService {
-  // Llaves de almacenamiento
+  // Llaves de almacenamiento persistente
   static const String _currentTripKey = 'current_trip_data';
   static const String _tokenKey = 'auth_token';
-  static const String _biometricEnabledKey = 'use_biometrics';
-  static const String _passwordKey = 'auth_password';
-  static const String _biometricEmailKey =
-      'biometric_user_email'; // <--- NUEVA LLAVE
+  static const String _deviceIdKey = 'unique_device_id';
+  static const String _biometricEmailKey = 'biometric_user_email';
 
-  // Instancia de almacenamiento encriptado
+  // LLAVES AUXILIARES DE GPS
+  static const String _lastDriverLatKey = 'last_known_driver_lat';
+  static const String _lastDriverLngKey = 'last_known_driver_lng';
+
   final _secureStorage = const FlutterSecureStorage();
 
-  // --- MÉTODOS DE ENROLAMIENTO BIOMÉTRICO (LÓGICA NEQUI) ---
+  // --- PERSISTENCIA LOCAL DE GPS ---
+  Future<void> saveLastPosition(double lat, double lng) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_lastDriverLatKey, lat);
+      await prefs.setDouble(_lastDriverLngKey, lng);
+    } catch (e) {
+      debugPrint("Error al escribir posición en caché local: $e");
+    }
+  }
 
-  // Este es el método que te marcaba error en la línea 129 del login
+  Future<Map<String, double>?> getLastPosition() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final double? lat = prefs.getDouble(_lastDriverLatKey);
+      final double? lng = prefs.getDouble(_lastDriverLngKey);
+      if (lat != null && lng != null) {
+        return {'lat': lat, 'lng': lng};
+      }
+    } catch (e) {
+      debugPrint("Error al leer posición de caché local: $e");
+    }
+    return null;
+  }
+
+  // --- BIOMETRÍA Y SEGURIDAD INDEXADA POR CUENTA ---
+
+  // Guarda la contraseña indexada por correo electrónico
+  Future<void> saveAccountPassword(String email, String password) async {
+    final key = 'bio_pass_${email.toLowerCase().trim()}';
+    await _secureStorage.write(key: key, value: password);
+  }
+
+  // Recupera la contraseña de un correo específico
+  Future<String?> getAccountPassword(String email) async {
+    final key = 'bio_pass_${email.toLowerCase().trim()}';
+    return await _secureStorage.read(key: key);
+  }
+
+  // Elimina la contraseña de un correo específico
+  Future<void> deleteAccountPassword(String email) async {
+    final key = 'bio_pass_${email.toLowerCase().trim()}';
+    await _secureStorage.delete(key: key);
+  }
+
+  // Habilita la biometría por cuenta específica
+  Future<void> setBiometricEnabledForAccount(String email, bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'bio_enabled_${email.toLowerCase().trim()}';
+    await prefs.setBool(key, enabled);
+  }
+
+  // Consulta si la biometría está habilitada para una cuenta específica
+  Future<bool> isBiometricEnabledForAccount(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'bio_enabled_${email.toLowerCase().trim()}';
+    return prefs.getBool(key) ?? false;
+  }
+
+  // --- MÉTODOS GENERALES ---
   Future<void> saveBiometricEmail(String email) async {
     await _secureStorage.write(key: _biometricEmailKey, value: email);
   }
 
-  // Este es el método que te marcaba error en la línea 91 del login
   Future<String?> getBiometricEmail() async {
     return await _secureStorage.read(key: _biometricEmailKey);
   }
-
-  static const String _deviceIdKey = 'unique_device_id';
 
   Future<void> saveDeviceId(String id) async {
     final prefs = await SharedPreferences.getInstance();
@@ -38,16 +95,6 @@ class StorageService {
     return prefs.getString(_deviceIdKey);
   }
 
-  // --- MANEJO DE CONTRASEÑA ---
-  Future<void> savePassword(String password) async {
-    await _secureStorage.write(key: _passwordKey, value: password);
-  }
-
-  Future<String?> getPassword() async {
-    return await _secureStorage.read(key: _passwordKey);
-  }
-
-  // --- MANEJO DEL TOKEN ---
   Future<String?> getToken() async {
     return await _secureStorage.read(key: _tokenKey);
   }
@@ -56,35 +103,16 @@ class StorageService {
     await _secureStorage.write(key: _tokenKey, value: token);
   }
 
-  // --- CONFIGURACIÓN DE BIOMETRÍA ---
-  Future<void> setBiometricEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_biometricEnabledKey, enabled);
-  }
-
-  Future<bool> isBiometricEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_biometricEnabledKey) ?? false;
-  }
-
-  // --- LIMPIEZA TOTAL ---
-  // Modifica este método en StorageService
-  Future<void> deleteAll() async {
-    // 1. Borramos el token (la sesión activa)
-    await _secureStorage.delete(key: _tokenKey);
-
-    // 2. NO BORRAMOS ni la contraseña ni el email biométrico.
-    // Esto es lo que permite que la huella siga apareciendo después de cerrar sesión.
-
-    // 3. Mantenemos el estado de "biometría habilitada" en true
-    // para que el dispositivo siga siendo considerado "Seguro".
-  }
-
   Future<void> deleteToken() async {
     await _secureStorage.delete(key: _tokenKey);
   }
 
-  // --- DATOS DE VIAJE ---
+  Future<void> deleteAll() async {
+    // 🟢 CORREGIDO: Solo eliminamos el token de sesión activa.
+    // Esto preserva las contraseñas indexadas y estados biométricos locales.
+    await _secureStorage.delete(key: _tokenKey);
+  }
+
   Future<void> saveCurrentTrip(Trip trip) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_currentTripKey, trip.toJson());

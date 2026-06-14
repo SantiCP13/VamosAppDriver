@@ -1,6 +1,9 @@
+// lib/features/home/services/location_service.dart
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart';
+import '../../../core/di/injection_container.dart'; // Inyector de dependencias (sl)
+import '../../../core/services/storage_service.dart'; // Import del servicio de persistencia
 
 class LocationService {
   /// Solicita permisos y verifica si el GPS está encendido
@@ -8,13 +11,14 @@ class LocationService {
     bool serviceEnabled;
     LocationPermission permission;
 
-    // 1. Verificar hardware
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
+      debugPrint(
+        "📡 [LocationService] El hardware de ubicación (GPS) está desactivado.",
+      );
       return false;
     }
 
-    // 2. Verificar permisos en primer plano (Mientras la app está en uso)
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -24,31 +28,22 @@ class LocationService {
     }
 
     if (permission == LocationPermission.deniedForever) {
-      await Geolocator.openAppSettings(); // Se utiliza Geolocator de forma explícita
+      await Geolocator.openAppSettings();
       return false;
     }
 
-    // =========================================================================
-    // CORRECCIÓN PARA SEGUNDO PLANO (Permitir todo el tiempo / ACCESS_BACKGROUND_LOCATION)
-    // Obligatorio para Android 10+ (Note 9) y Android 14 (Moto G34)
-    // =========================================================================
     if (permission == LocationPermission.whileInUse) {
       final alwaysStatus = await Permission.locationAlways.status;
       if (alwaysStatus.isDenied) {
-        // En Android 11+ esto abrirá los ajustes de ubicación de la app automáticamente
-        // para que el conductor seleccione manualmente la opción "Permitir todo el tiempo".
         final result = await Permission.locationAlways.request();
         if (!result.isGranted) {
           debugPrint(
-            "⚠️ El conductor denegó la ubicación todo el tiempo (segundo plano).",
+            "⚠️ [LocationService] Permiso de segundo plano (locationAlways) denegado.",
           );
-          // Puedes retornar false si tu lógica de negocio exige este permiso de fondo
-          // para poder recibir asignaciones de viajes en segundo plano.
         }
       }
     }
 
-    // 3. Solicitar exención de optimización de batería (Crucial en Moto G34 con Android 14)
     final batteryStatus = await Permission.ignoreBatteryOptimizations.status;
     if (batteryStatus.isDenied) {
       await Permission.ignoreBatteryOptimizations.request();
@@ -57,24 +52,87 @@ class LocationService {
     return true;
   }
 
-  /// Obtiene la posición actual con Timeout y Fallback.
-  /// Esto evita el ANR (App Not Responding).
+  /// Obtiene la posición actual con un sistema de cascada resiliente de 3 niveles
   Future<Position?> getCurrentLocation() async {
     try {
-      // 1. Intentar obtener la última ubicación conocida (es instantáneo)
-      Position? lastKnown = await Geolocator.getLastKnownPosition();
-      if (lastKnown != null) {
-        return lastKnown;
+      debugPrint(
+        "🛰️ [GPS CASCADE - NIVEL 1] Intentando obtener ubicación GPS satelital activa...",
+      );
+      // Intentar obtener la posición actual con un timeout estricto de 4 segundos para evitar ANR
+      Position current = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 4),
+      );
+
+      debugPrint(
+        "✅ [GPS CASCADE - NIVEL 1 ÉXITO] Posición fresca del sensor: (${current.latitude}, ${current.longitude})",
+      );
+      return current;
+    } catch (e) {
+      debugPrint(
+        "⚠️ [GPS CASCADE - NIVEL 1 FALLO] No se pudo obtener GPS en tiempo real (Timeout o falta de señal/red).",
+      );
+
+      // NIVEL 2: Intentar obtener la caché de ubicación del sistema operativo
+      try {
+        debugPrint(
+          "🛰️ [GPS CASCADE - NIVEL 2] Buscando última ubicación registrada en la caché del OS...",
+        );
+        Position? lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null) {
+          debugPrint(
+            "✅ [GPS CASCADE - NIVEL 2 ÉXITO] Recuperada del OS: (${lastKnown.latitude}, ${lastKnown.longitude})",
+          );
+          return lastKnown;
+        }
+        debugPrint(
+          "⚠️ [GPS CASCADE - NIVEL 2 FALLO] La caché del sistema operativo retornó nulo.",
+        );
+      } catch (ex) {
+        debugPrint(
+          "🚨 [GPS CASCADE - NIVEL 2 ERROR] Fallo al consultar caché del OS: $ex",
+        );
       }
 
-      // 2. Si no hay última conocida, pedir la actual pero con TIMEOUT
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
-      );
-    } catch (e) {
-      return null;
+      // NIVEL 3: Leer la ubicación persistida en la base de datos local de la App (StorageService)
+      try {
+        debugPrint(
+          "💾 [GPS CASCADE - NIVEL 3] Intentando recuperar la última ubicación registrada por VAMOS...",
+        );
+        final storage = sl<StorageService>();
+        final savedPos = await storage.getLastPosition();
+
+        if (savedPos != null) {
+          final double lat = savedPos['lat']!;
+          final double lng = savedPos['lng']!;
+          debugPrint(
+            "✅ [GPS CASCADE - NIVEL 3 ÉXITO] Ubicación recuperada del disco persistente de la aplicación: ($lat, $lng)",
+          );
+
+          // Retornamos un objeto Position simulado para mantener compatibilidad con toda la app sin romper firmas
+          return Position(
+            latitude: lat,
+            longitude: lng,
+            timestamp: DateTime.now(),
+            accuracy: 15.0,
+            altitude: 0.0,
+            altitudeAccuracy: 0.0,
+            heading: 0.0,
+            headingAccuracy: 0.0,
+            speed: 0.0,
+            speedAccuracy: 0.0,
+          );
+        }
+        debugPrint(
+          "❌ [GPS CASCADE - NIVEL 3 FALLO] No se encontraron registros de ubicación previos guardados por esta app.",
+        );
+      } catch (ex) {
+        debugPrint(
+          "🚨 [GPS CASCADE - NIVEL 3 ERROR] Error de lectura en disco persistente local: $ex",
+        );
+      }
     }
+    return null;
   }
 
   Stream<Position> getPositionStream() {
@@ -83,9 +141,12 @@ class LocationService {
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
+        distanceFilter:
+            0, // 🔴 MODIFICADO: 0 metros para capturar cualquier micro-movimiento constantemente
         forceLocationManager: false,
-        intervalDuration: const Duration(seconds: 10),
+        intervalDuration: const Duration(
+          seconds: 2,
+        ), // 🔴 MODIFICADO: Solicitar ubicación constantemente cada 2 segundos
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationText:
               "VAMOS está transmitiendo tu ubicación para recibir viajes.",
@@ -96,7 +157,7 @@ class LocationService {
     } else {
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
+        distanceFilter: 0, // 🔴 MODIFICADO: 0 metros para iOS
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true,
       );

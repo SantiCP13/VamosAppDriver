@@ -56,7 +56,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loadSavedEmail() async {
     final savedEmail = await sl<StorageService>().getBiometricEmail();
-    if (savedEmail != null && mounted) {
+    // 🟢 CORREGIDO: Evitamos pre-rellenar o marcar la casilla si el valor guardado es vacío
+    if (savedEmail != null && savedEmail.isNotEmpty && mounted) {
       setState(() {
         _emailController.text = savedEmail;
         _rememberMe = true;
@@ -80,17 +81,15 @@ class _LoginScreenState extends State<LoginScreen> {
         await _authService.checkAccount(email, deviceId);
 
         final storage = sl<StorageService>();
-        final savedPass = await storage.getPassword();
-        final bioEnabled = await storage.isBiometricEnabled();
+        // 🟢 CONSULTA POR CUENTA ESPECÍFICA
+        final savedPass = await storage.getAccountPassword(email);
+        final bioEnabled = await storage.isBiometricEnabledForAccount(email);
 
         setState(() {
           _isEmailVerified = true;
           _checkingEmail = false;
           _hasSavedCredentials = (savedPass != null && bioEnabled == true);
         });
-
-        // --- SE ELIMINÓ LA SIGUIENTE LÍNEA PARA EVITAR QUE EL TECLADO SE ABRA SOLO ---
-        // _passwordFocusNode.requestFocus();
       } catch (e) {
         setState(() => _checkingEmail = false);
         _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
@@ -119,13 +118,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final storage = sl<StorageService>();
 
+      // 🟢 SE GUARDA SIEMPRE LA CONTRASEÑA EN EL DISPOSITIVO (ENCRIPTADA)
+      // Esto asegura que si el usuario activa la huella desde el perfil,
+      // la app ya tiene su credencial enlazada y el botón biométrico funcionará.
+      await storage.saveAccountPassword(email, password);
+
       if (_rememberMe) {
         await storage.saveBiometricEmail(email);
-        await storage.savePassword(password);
-        await storage.setBiometricEnabled(true);
+        await storage.setBiometricEnabledForAccount(email, true);
       } else {
         await storage.saveBiometricEmail("");
-        await storage.setBiometricEnabled(false);
+        await storage.setBiometricEnabledForAccount(email, false);
       }
 
       if (!mounted) return;
@@ -143,7 +146,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final bioService = sl<BiometricService>();
 
     final enteredEmail = _emailController.text.trim();
-    final savedPass = await storage.getPassword();
+    // 🟢 OPTIMIZADO: SE EXTRAE LA CONTRASEÑA ENLAZADA ESTRICTAMENTE A ESTE EMAIL
+    final savedPass = await storage.getAccountPassword(enteredEmail);
 
     if (savedPass == null || enteredEmail.isEmpty) {
       _showSnack("Error de credenciales. Usa tu contraseña.", isError: true);

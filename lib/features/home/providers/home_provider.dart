@@ -11,6 +11,7 @@ import '../../../../core/network/api_client.dart';
 import 'dart:convert';
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+// <--- AGREGAR ESTA IMPORTACIÓN
 // --------------------------------------------------------
 // IMPORTS CORE (Modelos e Inyección)
 // --------------------------------------------------------
@@ -297,11 +298,17 @@ class HomeProvider extends ChangeNotifier {
         notifyListeners();
         return null;
       }
+
+      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
+      if (res.containsKey('message')) {
+        return res['message'].toString();
+      }
+
       return "No se pudo registrar tu almuerzo.";
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return e.toString().replaceAll("Exception: ", "");
+      return _extractExceptionMessage(e); // 🟢 Cambiado aquí
     }
   }
 
@@ -320,39 +327,46 @@ class HomeProvider extends ChangeNotifier {
 
       if (res['status'] == 'success') {
         _turnoEstado = 'ACTIVO';
-        _isOnline = true;
+        _isOnline = true; // El conductor está en línea listo para viajes
+        _alreadyHadLunch = false; // 🟢 RESET PARA NUEVA JORNADA
 
-        // 🟢 Apagar temporizadores de pausa y de almuerzo de forma segura
-        _stopBreakTimer();
-        _stopLunchTimer();
-
+        // Encender rastreo en tiempo real
         _startListeningTrips();
         _startTracking();
+        _startRouteRecalculationTimer();
 
         _isLoading = false;
         notifyListeners();
-        return null;
+        return null; // Éxito
       }
-      return "No se pudo reanudar el turno.";
+
+      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
+      if (res.containsKey('message')) {
+        return res['message'].toString();
+      }
+
+      return "No se pudo iniciar el turno en el servidor.";
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return e.toString().replaceAll("Exception: ", "");
+      return _extractExceptionMessage(
+        e,
+      ); // 🟢 Cambiado aquí para disparar la alerta
     }
   }
 
   /// Inicia el temporizador de cuenta regresiva del break (CONFIGURADO A 10 SEGUNDOS PARA PRUEBA)
   void _startBreakTimer() {
     _breakTimer?.cancel();
-    _breakSecondsRemaining = 10; // 🟢 Cambiado temporalmente de 900 a 10
+    _breakSecondsRemaining = 900; // 🟢 Cambiado temporalmente de 900 a 10
     _breakStartTime = DateTime.now();
 
     // Programamos la alarma nativa para dentro de 10 segundos
     NotificationService.scheduleNotification(
       id: 999,
-      title: "⏰ ¡Fin de tu Break de 15 min!",
+      title: "¡Fin de tu Break de 15 min!",
       body: "Debes reanudar tu turno o terminar el turno de inmediato.",
-      delay: const Duration(seconds: 10), // 🟢 10 segundos
+      delay: const Duration(minutes: 15), // 🟢 15 minutos
     );
 
     _breakTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -360,7 +374,7 @@ class HomeProvider extends ChangeNotifier {
         final elapsed = DateTime.now().difference(_breakStartTime!).inSeconds;
 
         // 🟢 Cambiado temporalmente de 900 a 10 para que la pantalla llegue a cero en 10 segundos
-        _breakSecondsRemaining = 10 - elapsed;
+        _breakSecondsRemaining = 900 - elapsed;
 
         if (_breakSecondsRemaining <= 0) {
           _breakSecondsRemaining = 0;
@@ -369,7 +383,7 @@ class HomeProvider extends ChangeNotifier {
           // Alarma de respaldo por si el conductor tiene la app abierta en primer plano
           NotificationService.showNotification(
             id: 999,
-            title: "⏰ ¡Fin de tu Break de 15 min!",
+            title: "¡Fin de tu Break de 15 min!",
             body: "Debes reanudar tu turno o terminar el turno de inmediato.",
           );
         }
@@ -395,7 +409,12 @@ class HomeProvider extends ChangeNotifier {
     required int kilometraje,
     required File foto,
   }) async {
-    if (_isLoading) return null;
+    if (_isLoading) {
+      debugPrint(
+        "API_DEBUG_PROVIDER: Retornando temprano porque _isLoading ya es true.",
+      );
+      return null;
+    }
     if (_selectedVehicle == null) {
       return "⚠️ Debes seleccionar un vehículo para iniciar el turno.";
     }
@@ -413,6 +432,9 @@ class HomeProvider extends ChangeNotifier {
         _currentPosition = LatLng(position.latitude, position.longitude);
       }
 
+      debugPrint(
+        "API_DEBUG_PROVIDER: Enviando petición HTTP a iniciarTurno...",
+      );
       // Llamar al endpoint del backend
       final res = await _driverRepository.iniciarTurno(
         idVehiculo: _selectedVehicle!.id,
@@ -420,6 +442,9 @@ class HomeProvider extends ChangeNotifier {
         foto: foto,
         lat: _currentPosition?.latitude,
         lng: _currentPosition?.longitude,
+      );
+      debugPrint(
+        "API_DEBUG_PROVIDER: Respuesta recibida del repositorio -> $res",
       );
 
       if (res['status'] == 'success') {
@@ -436,11 +461,56 @@ class HomeProvider extends ChangeNotifier {
         notifyListeners();
         return null; // Éxito
       }
+
+      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
+      if (res.containsKey('message')) {
+        final backendMessage = res['message'].toString();
+        debugPrint(
+          "API_DEBUG_PROVIDER: El backend retornó un estado fallido controlado con mensaje: $backendMessage",
+        );
+        return backendMessage;
+      }
+
       return "No se pudo iniciar el turno en el servidor.";
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        "API_DEBUG_PROVIDER: Se capturó una excepción en el catch -> $e",
+      );
+      debugPrint("API_DEBUG_PROVIDER: StackTrace -> $stackTrace");
       _isLoading = false;
       notifyListeners();
-      return e.toString().replaceAll("Exception: ", "");
+
+      final extractedMsg = _extractExceptionMessage(e);
+      debugPrint("API_DEBUG_PROVIDER: Mensaje extraído final -> $extractedMsg");
+      return extractedMsg;
+    }
+  }
+
+  // 🟢 NUEVO MÉTODO: Fuerza el estado offline localmente (Usado por Sockets en tiempo real)
+  void forzarEstadoOffline() {
+    // NOTA: Reemplace '_turnoEstado' por el nombre de la variable interna real
+    // que use en su HomeProvider para almacenar el estado del turno (ej: 'turnoEstado', '_estado', etc.)
+    _turnoEstado = 'OFFLINE';
+
+    // Opcional: Limpiar datos temporales del turno si los tiene en el provider
+    notifyListeners(); // Redibuja la interfaz de inmediato
+  }
+
+  // 🟢 NUEVO MÉTODO: Sincroniza con el servidor (Usado al volver a la app / resumed)
+  // 🟢 CORREGIDO: Sincroniza usando el método real 'obtenerTurnoActivo'
+  Future<void> verificarTurnoActivoConServidor() async {
+    try {
+      final turnoData = await _driverRepository.obtenerTurnoActivo();
+
+      if (turnoData['status'] == 'success' &&
+          turnoData['tiene_turno_activo'] == true) {
+        _turnoEstado = turnoData['estado'];
+      } else {
+        _turnoEstado = 'OFFLINE';
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Error verificando turno activo con servidor: $e");
     }
   }
 
@@ -476,7 +546,7 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return e.toString().replaceAll("Exception: ", "");
+      return _extractExceptionMessage(e); // 🟢 Cambiado aquí
     }
   }
 
@@ -523,11 +593,19 @@ class HomeProvider extends ChangeNotifier {
         notifyListeners();
         return null;
       }
+
+      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
+      if (res.containsKey('message')) {
+        return res['message'].toString();
+      }
+
       return "No se pudo finalizar el turno.";
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return e.toString().replaceAll("Exception: ", "");
+      return _extractExceptionMessage(
+        e,
+      ); // 🟢 Cambiado aquí para extraer el error real
     }
   }
 
@@ -927,6 +1005,27 @@ class HomeProvider extends ChangeNotifier {
   Future<void> initLocation() async {
     _isLoading = true;
     notifyListeners();
+
+    // 🔴 BLINDAJE OFFLINE: Recuperar inmediatamente la última posición registrada en disco
+    try {
+      debugPrint(
+        "💾 [HomeProvider - INIT] Leyendo última posición del disco persistente...",
+      );
+      final cachedPos = await _storageService.getLastPosition();
+      if (cachedPos != null) {
+        _currentPosition = LatLng(cachedPos['lat']!, cachedPos['lng']!);
+        _currentHeading = 0.0;
+        debugPrint(
+          "✅ [HomeProvider - INIT] Posición de respaldo cargada en la UI: $_currentPosition",
+        );
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint(
+        "🚨 [HomeProvider - INIT] Error al leer caché local en el arranque: $e",
+      );
+    }
+
     await loadVehicles();
 
     final authProvider = sl<AuthProvider>();
@@ -961,12 +1060,12 @@ class HomeProvider extends ChangeNotifier {
             _isOnline = false;
             _breakSecondsRemaining =
                 turnoData['segundos_restantes'] ??
-                10; // O 900 según tus pruebas
+                900; // O 900 según tus pruebas
 
             if (_breakSecondsRemaining > 0) {
               // Reconstruimos la hora de inicio simulada para mantener sincronizado el reloj
               _breakStartTime = DateTime.now().subtract(
-                Duration(seconds: 10 - _breakSecondsRemaining),
+                Duration(seconds: 900 - _breakSecondsRemaining),
               );
 
               _breakTimer?.cancel();
@@ -976,14 +1075,14 @@ class HomeProvider extends ChangeNotifier {
                       .difference(_breakStartTime!)
                       .inSeconds;
                   _breakSecondsRemaining =
-                      10 -
+                      900 -
                       elapsed; // Usar 900 si restauras a modo de producción
                   if (_breakSecondsRemaining <= 0) {
                     _breakSecondsRemaining = 0;
                     _stopBreakTimer();
                     NotificationService.showNotification(
                       id: 999,
-                      title: "⏰ ¡Fin de tu Break de 15 min!",
+                      title: "¡Fin de tu Break de 15 min!",
                       body:
                           "Debes reanudar tu turno o terminar el turno de inmediato.",
                     );
@@ -1246,7 +1345,18 @@ class HomeProvider extends ChangeNotifier {
   void _updatePosition(Position pos) async {
     final newLocation = LatLng(pos.latitude, pos.longitude);
 
-    // Si la precisión del GPS es muy baja (mayor a 80 metros), alertar pérdida de señal GPS
+    // 🔴 BLINDAJE DE ACTUALIZACIÓN CONSTANTE: Guardar en disco persistente a cada rato
+    try {
+      await _storageService.saveLastPosition(pos.latitude, pos.longitude);
+      debugPrint(
+        "🔄 [GPS STREAM UPDATE] Persistiendo coordenada actual de forma constante: (${pos.latitude}, ${pos.longitude})",
+      );
+    } catch (ex) {
+      debugPrint(
+        "🚨 [GPS STREAM UPDATE] Fallo en la persistencia constante: $ex",
+      );
+    }
+
     if (pos.accuracy > 80.0) {
       if (!_isGpsSignalLost) {
         _isGpsSignalLost = true;
@@ -2178,6 +2288,40 @@ class HomeProvider extends ChangeNotifier {
       _routePoints = _routePoints.sublist(closestIndex);
       notifyListeners();
     }
+  }
+
+  /// Extrae el mensaje de error de red enviado por el backend (Laravel) de forma dinámica
+  String _extractExceptionMessage(dynamic e) {
+    try {
+      if (e != null) {
+        final dynamic error = e;
+
+        // Comprobamos de manera dinámica si el error contiene una respuesta del servidor
+        if (error.response != null) {
+          final responseData = error.response.data;
+          if (responseData != null) {
+            if (responseData is Map && responseData.containsKey('message')) {
+              return responseData['message'].toString();
+            } else if (responseData is String) {
+              final decoded = json.decode(responseData);
+              if (decoded is Map && decoded.containsKey('message')) {
+                return decoded['message'].toString();
+              }
+            }
+          }
+        }
+
+        // Si el objeto de error contiene un mensaje de red directo
+        if (error.message != null) {
+          return error.message.toString();
+        }
+      }
+    } catch (_) {
+      // Si ocurre un error de lectura o no tiene propiedades de red, continúa al fallback
+    }
+
+    // Retorno por defecto para cualquier otra excepción estándar de Dart
+    return e.toString().replaceAll("Exception: ", "");
   }
 
   @override

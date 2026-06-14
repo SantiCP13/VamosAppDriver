@@ -13,6 +13,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../../../core/di/injection_container.dart';
 import '../../../core/services/storage_service.dart';
 import '../../../core/services/biometric_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -55,8 +56,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _checkBiometricSupport() async {
     final bioService = sl<BiometricService>();
     final storage = sl<StorageService>();
+    final user = context.read<AuthProvider>().user;
+
     bool available = await bioService.isAvailable();
-    bool enabled = await storage.isBiometricEnabled();
+    bool enabled = false;
+
+    // 🟢 Simplificado: Solo verificamos que el objeto user no sea nulo
+    if (user != null) {
+      enabled = await storage.isBiometricEnabledForAccount(user.email);
+    }
+
     if (mounted) {
       setState(() {
         _isBioAvailable = available;
@@ -752,8 +761,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     Switch.adaptive(
                                       value: _isBioEnabled,
                                       onChanged: (v) async {
-                                        await sl<StorageService>()
-                                            .setBiometricEnabled(v);
+                                        final user = context
+                                            .read<AuthProvider>()
+                                            .user;
+
+                                        // 🟢 Guardamos el estado biométrico asociado a esta cuenta
+                                        if (user != null) {
+                                          await sl<StorageService>()
+                                              .setBiometricEnabledForAccount(
+                                                user.email,
+                                                v,
+                                              );
+                                        }
+
                                         setState(() {
                                           _isBioEnabled = v;
                                         });
@@ -815,6 +835,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ],
                             ),
                           ),
+                          const SizedBox(height: 30),
+                          // SECCIÓN DE POLÍTICA DE PRIVACIDAD
+                          _buildPrivacyPolicySection(),
                           const SizedBox(height: 100),
                         ],
                       ),
@@ -1229,4 +1252,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
   );
+
+  Widget _buildPrivacyPolicySection() {
+    // Reemplaza esta URL con el enlace real de tu sitio web
+    final Uri url = Uri.parse('https://vamosapp.com.co/');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Text(
+            "Si quieres saber más sobre la política de privacidad y tratamiento de datos, por favor visita nuestra página web:",
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              fontSize: 12,
+              color: Colors.white54,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: () async {
+              try {
+                if (await canLaunchUrl(url)) {
+                  await launchUrl(
+                    url,
+                    mode: LaunchMode
+                        .externalApplication, // Abre en el navegador del sistema
+                  );
+                } else {
+                  _showSnack("No se pudo abrir el enlace", isError: true);
+                }
+              } catch (e) {
+                _showSnack(
+                  "Error al intentar abrir el sitio web",
+                  isError: true,
+                );
+              }
+            },
+            child: Text(
+              url.toString(),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.montserrat(
+                fontSize: 12,
+                color: AppColors.primaryGreen,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
