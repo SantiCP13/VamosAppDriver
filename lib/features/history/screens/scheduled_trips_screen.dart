@@ -142,9 +142,9 @@ class _ScheduledTripsScreenState extends State<ScheduledTripsScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                DateFormat(
-                  'dd MMM, yyyy • hh:mm a',
-                ).format(trip.date).toUpperCase(),
+                DateFormat('dd MMM, yyyy • hh:mm a')
+                    .format(trip.scheduledAt ?? trip.date)
+                    .toUpperCase(), //  Usa scheduledAt (Programado)
                 style: GoogleFonts.montserrat(
                   fontSize: 10,
                   fontWeight: FontWeight.w800,

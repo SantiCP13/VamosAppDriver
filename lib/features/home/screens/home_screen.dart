@@ -262,19 +262,18 @@ class _HomeScreenState extends State<HomeScreen>
                 provider.routePoints,
               );
             }
-
-            if (_isTrackingDriver && _animatedPosition != null) {
-              final double targetZoom = _mapController.camera.zoom;
-              final LatLng offsetCenter = _getOffsetPosition(
-                _animatedPosition!,
-                targetZoom,
-              );
-              _mapController.move(offsetCenter, targetZoom);
-            }
           });
         });
 
         _markerAnimationController!.forward();
+        if (_isTrackingDriver && _isMapReady) {
+          final double currentZoom = _mapController.camera.zoom;
+          final LatLng offsetCenter = _getOffsetPosition(newPos, currentZoom);
+          _animatedMapMove(
+            offsetCenter,
+            currentZoom,
+          ); // Paneado amortiguado de 700ms
+        }
       }
     }
 
@@ -2169,125 +2168,99 @@ class _HomeScreenState extends State<HomeScreen>
       );
     }
 
+    // Leemos la ubicación inicial solo una vez al renderizar por primera vez
+    final homeProvider = context.read<HomeProvider>();
+    final LatLng initialCenter =
+        homeProvider.currentPosition ?? const LatLng(4.6097, -74.0817);
+
     return Scaffold(
       key: _scaffoldKey,
       drawer: const SideMenu(),
-      body: Consumer<HomeProvider>(
-        builder: (context, provider, _) {
-          final trip = provider.activeTrip;
-
-          // Si el viaje está en curso (STARTED), renderizamos la pantalla completa directamente
-          // sin cargar el mapa para evitar consumo innecesario de la API de Mapbox
-          if (trip != null && trip.status == TripStatus.STARTED) {
-            // Aseguramos que la bandera del mapa pase a false al desmontarse para mayor protección
-            if (_isMapReady) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) setState(() => _isMapReady = false);
-              });
-            }
-            return _buildFullScreenDriverTripView(context, provider, trip);
-          }
-
-          final incoming = provider.incomingTrip;
-
-          final pointsToDraw = provider.routePoints.isEmpty
-              ? <LatLng>[]
-              : (_animatedRoutePoints.isNotEmpty
-                    ? _animatedRoutePoints
-                    : provider.routePoints);
-
-          final bool isArrived =
-              trip != null && trip.status == TripStatus.ARRIVED;
-
-          final LatLng? driverPos =
-              _animatedPosition ?? provider.currentPosition;
-
-          final LatLng? passengerPos =
-              _animatedPassengerPosition ?? provider.passengerLocation;
-
-          return Stack(
+      body: Stack(
+        children: [
+          // ===================================================================
+          // 1. EL MAPA Y LAS CAPAS ESTÁTICAS (No se reconstruyen nunca al mover el GPS)
+          // ===================================================================
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: initialCenter,
+              initialZoom: 16.0,
+              onMapReady: () {
+                setState(() => _isMapReady = true);
+                final currentPos = context.read<HomeProvider>().currentPosition;
+                if (currentPos != null &&
+                    context.read<HomeProvider>().activeTrip == null &&
+                    context.read<HomeProvider>().incomingTrip == null) {
+                  _mapController.move(currentPos, 16.5);
+                }
+              },
+              onPositionChanged: (camera, hasGesture) {
+                if (hasGesture && _isTrackingDriver) {
+                  setState(() {
+                    _isTrackingDriver = false;
+                  });
+                }
+              },
+            ),
             children: [
-              FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter:
-                      provider.currentPosition ??
-                      const LatLng(4.6097, -74.0817),
-                  initialZoom: 16.0,
+              TileLayer(
+                urlTemplate:
+                    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                subdomains: const ['a', 'b', 'c', 'd'],
+                tileProvider: CachedTileProvider(),
+                retinaMode: true,
+                maxNativeZoom: 18,
+                minNativeZoom: 10,
+                keepBuffer: 1,
+                panBuffer: 0,
+                tileBuilder: (context, tileWidget, tile) {
+                  return ColorFiltered(
+                    colorFilter: const ColorFilter.matrix([
+                      2.2,
+                      0.0,
+                      0.0,
+                      0.0,
+                      35.0,
+                      0.0,
+                      2.2,
+                      0.0,
+                      0.0,
+                      35.0,
+                      0.0,
+                      0.0,
+                      2.2,
+                      0.0,
+                      35.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0,
+                      0.0,
+                    ]),
+                    child: tileWidget,
+                  );
+                },
+              ),
 
-                  // MODIFICADO: Doble protección al estar listo el mapa
-                  onMapReady: () {
-                    setState(() => _isMapReady = true);
+              // CAPA DE POLILÍNEAS OPTIMIZADA (Solo se reconstruye si cambian las rutas)
+              Consumer<HomeProvider>(
+                builder: (context, provider, _) {
+                  final trip = provider.activeTrip;
+                  final incoming = provider.incomingTrip;
+                  final bool isArrived =
+                      trip != null && trip.status == TripStatus.ARRIVED;
 
-                    // Si al cargar el mapa ya contamos con GPS del conductor y no hay viaje, centramos inmediatamente
-                    final currentPos = provider.currentPosition;
-                    if (currentPos != null &&
-                        trip == null &&
-                        incoming == null) {
-                      _mapController.move(currentPos, 16.5);
-                    }
-                  },
+                  final pointsToDraw = provider.routePoints.isEmpty
+                      ? <LatLng>[]
+                      : (_animatedRoutePoints.isNotEmpty
+                            ? _animatedRoutePoints
+                            : provider.routePoints);
 
-                  // BLOQUEO DE GESTOS: Si hay viaje entrante, desactivamos toda interacción
-                  interactionOptions: InteractionOptions(
-                    flags: incoming != null
-                        ? InteractiveFlag.none
-                        : InteractiveFlag.all,
-                  ),
-                  onPositionChanged: (camera, hasGesture) {
-                    if (hasGesture && _isTrackingDriver) {
-                      setState(() {
-                        _isTrackingDriver = false;
-                      });
-                    }
-                  },
-                ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                    subdomains: const ['a', 'b', 'c', 'd'],
-                    tileProvider: CachedTileProvider(),
-                    retinaMode: true,
-                    maxNativeZoom: 18,
-                    minNativeZoom: 10,
-
-                    // 🟢 OPTIMIZACIONES EXCLUSIVAS PARA VELOCIDAD EN REDES MÓVILES
-                    keepBuffer:
-                        1, // Mantiene solo 1 nivel de zoom anterior en memoria (Ahorra RAM)
-                    panBuffer:
-                        0, // 🟢 CLAVE: No descarga imágenes fuera de la pantalla, cargando lo visible al instante
-                    // Filtro de color calibrado para los textos y las calles
-                    tileBuilder: (context, tileWidget, tile) {
-                      return ColorFiltered(
-                        colorFilter: const ColorFilter.matrix([
-                          2.2,
-                          0.0,
-                          0.0,
-                          0.0,
-                          35.0,
-                          0.0,
-                          2.2,
-                          0.0,
-                          0.0,
-                          35.0,
-                          0.0,
-                          0.0,
-                          2.2,
-                          0.0,
-                          35.0,
-                          0.0,
-                          0.0,
-                          0.0,
-                          1.0,
-                          0.0,
-                        ]),
-                        child: tileWidget,
-                      );
-                    },
-                  ),
-                  if (pointsToDraw.isNotEmpty && incoming == null && !isArrived)
-                    PolylineLayer(
+                  if (pointsToDraw.isNotEmpty &&
+                      incoming == null &&
+                      !isArrived) {
+                    return PolylineLayer(
                       polylines: [
                         Polyline(
                           points: pointsToDraw,
@@ -2295,92 +2268,123 @@ class _HomeScreenState extends State<HomeScreen>
                           strokeWidth: 5.0,
                         ),
                       ],
-                    ),
+                    );
+                  }
 
-                  if (isArrived && driverPos != null && passengerPos != null)
-                    PolylineLayer(
+                  if (isArrived &&
+                      _animatedPosition != null &&
+                      _animatedPassengerPosition != null) {
+                    return PolylineLayer(
                       polylines: [
                         Polyline(
-                          points: [driverPos, passengerPos],
-                          color: Colors.blueAccent.withValues(
-                            alpha: 0.6,
-                          ), // Color más visible y estético
+                          points: [
+                            _animatedPosition!,
+                            _animatedPassengerPosition!,
+                          ],
+                          // ignore: deprecated_member_use
+                          color: Colors.blueAccent.withOpacity(0.6),
                           strokeWidth: 4.0,
                           pattern: const StrokePattern.dotted(),
                         ),
                       ],
-                    ),
+                    );
+                  }
 
-                  // MARCADORES
-                  _MarkersLayer(
-                    animatedPosition: _animatedPosition,
-                    animatedHeading: _animatedHeading,
-                    animatedPassengerPosition:
-                        _animatedPassengerPosition, // Pasar la coordenada suavizada
-                  ),
-                ],
+                  return const SizedBox.shrink();
+                },
               ),
-              if (trip == null && incoming == null) _buildMenuButton(),
-              if (trip == null && incoming == null)
-                _buildOnlineStatusIndicator(provider),
-              if (provider.isNetworkDisconnected || provider.isGpsSignalLost)
-                Positioned(
-                  top: 90, // Posicionado justo debajo del indicador de estado
-                  left: 20,
-                  right: 20,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (provider.isNetworkDisconnected)
-                        _buildStatusBanner(
-                          icon: Icons.cloud_off_rounded,
-                          message:
-                              "Sin conexión a internet. Intentando reconectar...",
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      if (provider.isGpsSignalLost &&
-                          !provider.isNetworkDisconnected)
-                        _buildStatusBanner(
-                          icon: Icons.gps_off_rounded,
-                          message: "Señal de GPS débil o inestable.",
-                          backgroundColor: Colors.orangeAccent,
-                        ),
-                    ],
-                  ),
-                ),
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 20, bottom: 16),
+
+              // CAPA DE MARCADORES OPTIMIZADA (Usa su propio Consumer interno)
+              _MarkersLayer(
+                animatedPosition: _animatedPosition,
+                animatedHeading: _animatedHeading,
+                animatedPassengerPosition: _animatedPassengerPosition,
+              ),
+            ],
+          ),
+
+          // ===================================================================
+          // 2. CAPAS SUPERIORES E INTERFAZ (Se reconstruyen de forma aislada)
+          // ===================================================================
+          Consumer<HomeProvider>(
+            builder: (context, provider, _) {
+              final trip = provider.activeTrip;
+              final incoming = provider.incomingTrip;
+
+              // Si el viaje está en curso (STARTED), mostramos la vista sin mapa
+              if (trip != null && trip.status == TripStatus.STARTED) {
+                if (_isMapReady) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() => _isMapReady = false);
+                  });
+                }
+                return _buildFullScreenDriverTripView(context, provider, trip);
+              }
+
+              return Stack(
+                children: [
+                  if (trip == null && incoming == null) _buildMenuButton(),
+                  if (trip == null && incoming == null)
+                    _buildOnlineStatusIndicator(provider),
+                  if (provider.isNetworkDisconnected ||
+                      provider.isGpsSignalLost)
+                    Positioned(
+                      top: 90,
+                      left: 20,
+                      right: 20,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (trip != null) ...[
-                            _buildWazeButton(provider),
-                            const SizedBox(height: 12),
-                          ],
-                          // CONTROL DE VISIBILIDAD: Solo muestra el botón si no estamos en tracking,
-                          // hay posición y NO hay un viaje entrante.
-                          if (!_isTrackingDriver &&
-                              provider.currentPosition != null &&
-                              incoming == null)
-                            _buildReCenterButton(provider),
+                          if (provider.isNetworkDisconnected)
+                            _buildStatusBanner(
+                              icon: Icons.cloud_off_rounded,
+                              message:
+                                  "Sin conexión a internet. Intentando reconectar...",
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          if (provider.isGpsSignalLost &&
+                              !provider.isNetworkDisconnected)
+                            _buildStatusBanner(
+                              icon: Icons.gps_off_rounded,
+                              message: "Señal de GPS débil o inestable.",
+                              backgroundColor: Colors.orangeAccent,
+                            ),
                         ],
                       ),
                     ),
-                    _buildPanelContent(context, provider),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 20, bottom: 16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (trip != null) ...[
+                                _buildWazeButton(provider),
+                                const SizedBox(height: 12),
+                              ],
+                              if (!_isTrackingDriver &&
+                                  provider.currentPosition != null &&
+                                  incoming == null)
+                                _buildReCenterButton(provider),
+                            ],
+                          ),
+                        ),
+                        _buildPanelContent(context, provider),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }

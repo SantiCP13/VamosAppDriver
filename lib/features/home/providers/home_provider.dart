@@ -4,14 +4,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'dart:math' as math; // <-- AGREGAR ESTA LÍNEA AL INICIO
-import 'package:google_fonts/google_fonts.dart'; // <--- AGREGA ESTA LÍNEA AQUÍ
-import '../../../core/theme/app_colors.dart'; // <--- Y ESTA LÍNEA AQUÍ
+import 'dart:math' as math;
+import 'package:google_fonts/google_fonts.dart';
+import '../../../core/theme/app_colors.dart';
 import '../../../../core/network/api_client.dart';
 import 'dart:convert';
 import 'package:dart_pusher_channels/dart_pusher_channels.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-// <--- AGREGAR ESTA IMPORTACIÓN
+
 // --------------------------------------------------------
 // IMPORTS CORE (Modelos e Inyección)
 // --------------------------------------------------------
@@ -21,8 +21,8 @@ import '../../../core/models/vehicle_model.dart';
 import '../../../core/services/storage_service.dart';
 import '../../../core/utils/map_launcher.dart';
 import '../../../core/di/injection_container.dart';
-import 'dart:io'; // <--- RESUELVE EL ERROR DE 'File'
-import '../../../core/services/notification_service.dart'; // <--- RESUELVE EL ERROR DE 'NotificationService'
+import 'dart:io';
+import '../../../core/services/notification_service.dart';
 // --------------------------------------------------------
 // IMPORTS SERVICES & REPOSITORIES
 // --------------------------------------------------------
@@ -35,9 +35,9 @@ import '../repositories/trip_repository.dart';
 // --------------------------------------------------------
 import '../../wallet/providers/wallet_provider.dart';
 import '../../history/providers/history_provider.dart';
-import '../widgets/payment_waiting_sheet.dart'; // <--- WIDGET DE PAGO
+import '../widgets/payment_waiting_sheet.dart';
 import '../../auth/providers/auth_provider.dart';
-import '../../maps/services/route_service.dart'; // <--- SERVICIO DE RUTAS (OSRM)
+import '../../maps/services/route_service.dart';
 
 class HomeProvider extends ChangeNotifier {
   // 1. INYECCIÓN DE DEPENDENCIAS
@@ -45,7 +45,7 @@ class HomeProvider extends ChangeNotifier {
   final StorageService _storageService = sl<StorageService>();
   final DriverRepository _driverRepository = sl<DriverRepository>();
   final TripRepository _tripRepository = sl<TripRepository>();
-  final RouteService _routeService = RouteService(); // Instanciamos aquí
+  final RouteService _routeService = RouteService();
 
   HomeProvider();
 
@@ -53,20 +53,19 @@ class HomeProvider extends ChangeNotifier {
   bool _isOnline = false;
   bool _isLoading = false;
   String? _lastRejectedTripId;
-  // Añade estos Getters en HomeProvider.dart
+
   double get activeTripDistance => _activeTrip?.distanceKm ?? 0.0;
-  // --- VARIABLES PARA CÁLCULO LOCAL DE RUTA (AHORRO API) ---
+
   bool _extraWaitingTimeAdded = false;
   bool get extraWaitingTimeAdded => _extraWaitingTimeAdded;
-  // Ubicación y Rotación
+
   LatLng? _currentPosition;
   double _currentHeading = 0.0;
-  // Almacena la ubicación GPS en tiempo real enviada por el pasajero
-  // En home_provider.dart, añade este getter debajo de los otros:
+
   double get incomingDistance => _incomingDistance;
-  // Para saber qué ruta estamos mostrando
+
   String _incomingTripEta = "--";
-  // Viaje
+
   Trip? _incomingTrip;
   Trip? _activeTrip;
   set activeTrip(Trip? trip) {
@@ -81,29 +80,31 @@ class HomeProvider extends ChangeNotifier {
   bool _isGpsSignalLost = false;
   bool get isGpsSignalLost => _isGpsSignalLost;
 
-  Timer? _networkMonitorTimer;
+  // NUEVO: Almacenamiento temporal de puntos GPS en zonas sin cobertura
+  final List<Map<String, dynamic>> _offlineTrackingBuffer = [];
+  bool _isSyncingBuffer = false;
+
   // --- NUEVAS VARIABLES PARA EL CONTROL DE TURNOS (3 ESTADOS) ---
-  String _turnoEstado = 'OFFLINE'; // Valores: 'OFFLINE', 'ACTIVO', 'BREAK'
-  int _breakSecondsRemaining = 900; // 15 minutos en segundos (15 * 60 = 900)
+  String _turnoEstado = 'OFFLINE';
+  int _breakSecondsRemaining = 900;
   Timer? _breakTimer;
   DateTime? _breakStartTime;
-  // En HomeProvider.dart:
+
   bool _alreadyHadLunch = false;
   bool get alreadyHadLunch => _alreadyHadLunch;
   String get turnoEstado => _turnoEstado;
   int get breakSecondsRemaining => _breakSecondsRemaining;
 
-  // Formateador para mostrar el tiempo del break en formato MM:SS
   String get breakTimerFormated {
     final minutes = (_breakSecondsRemaining ~/ 60).toString().padLeft(2, '0');
     final seconds = (_breakSecondsRemaining % 60).toString().padLeft(2, '0');
     return "$minutes:$seconds";
   }
 
-  int _waitSeconds = 300; // 5 minutos por defecto
+  int _waitSeconds = 300;
   int get waitSeconds => _waitSeconds;
   Timer? _waitTimer;
-  // 1. Calcula el rumbo matemático exacto entre los movimientos del GPS local
+
   double _calculateBearing(LatLng start, LatLng end) {
     double startLat = start.latitude * (math.pi / 180.0);
     double startLng = start.longitude * (math.pi / 180.0);
@@ -121,7 +122,6 @@ class HomeProvider extends ChangeNotifier {
     return (bearing + 360.0) % 360.0;
   }
 
-  // 3. Mantén el getter igual
   Trip? get activeTrip => _activeTrip;
   List<LatLng> _routePoints = [];
   set routePoints(List<LatLng> value) {
@@ -131,16 +131,14 @@ class HomeProvider extends ChangeNotifier {
 
   double _totalRouteDistanceMeters = 0.0;
   double _totalRouteDurationSeconds = 0.0;
-  // Vehículos y Documentos (FUEC)
+
   List<Vehicle> _myVehicles = [];
   Vehicle? _selectedVehicle;
   List<DriverDocument> _documents = [];
 
-  // Subscriptions
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription? _tripSubscription;
 
-  // 3. GETTERS PÚBLICOS
   double _incomingDistance = 0;
 
   bool get isOnline => _isOnline;
@@ -156,10 +154,8 @@ class HomeProvider extends ChangeNotifier {
   Timer? _validationTimer;
   String get incomingTripEta => _incomingTripEta;
   Timer? _routeRecalculateTimer;
-  // En HomeProvider.dart:
 
-  // Temporizador para el almuerzo
-  int _lunchSecondsRemaining = 3600; // 1 hora
+  int _lunchSecondsRemaining = 3600;
   Timer? _lunchTimer;
   DateTime? _lunchStartTime;
 
@@ -175,17 +171,8 @@ class HomeProvider extends ChangeNotifier {
     return "$hours:$minutes:$seconds";
   }
 
-  /// Realiza un ping rápido a nivel de sockets para confirmar conectividad real
-  Future<bool> _hasInternetConnection() async {
-    try {
-      final result = await InternetAddress.lookup(
-        'dns.google',
-      ).timeout(const Duration(seconds: 3));
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
+  /// Retorna si existen coordenadas pendientes de sincronización en la cola local
+  bool get hasPendingOfflineCoordinates => _offlineTrackingBuffer.isNotEmpty;
 
   /// Cambia el estado de red de forma segura y notifica al UI
   void _setNetworkDisconnected(bool value) {
@@ -195,50 +182,16 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  /// Monitor constante que se ejecuta periódicamente para forzar la reconexión
-  void _startNetworkMonitor() {
-    _networkMonitorTimer?.cancel();
-    _networkMonitorTimer = Timer.periodic(const Duration(seconds: 5), (
-      timer,
-    ) async {
-      final hasInternet = await _hasInternetConnection();
-      _setNetworkDisconnected(!hasInternet);
-
-      // Si se recupera la conexión y el conductor está online, sincronizar ubicación de inmediato
-      if (hasInternet && _isOnline && _currentPosition != null) {
-        if (_activeTrip != null) {
-          _sendTripLocationToBackend(
-            _activeTrip!.id,
-            _currentPosition!.latitude,
-            _currentPosition!.longitude,
-            0.0,
-          );
-        } else {
-          _sendPositionToBackend(
-            _currentPosition!.latitude,
-            _currentPosition!.longitude,
-          );
-        }
-      }
-    });
-  }
-
-  void _stopNetworkMonitor() {
-    _networkMonitorTimer?.cancel();
-    _networkMonitorTimer = null;
-  }
-
   void _startLunchTimer() {
     _lunchTimer?.cancel();
     _lunchSecondsRemaining = 3600;
     _lunchStartTime = DateTime.now();
 
-    // Notificación nativa programada para 1 hora
     NotificationService.scheduleNotification(
       id: 888,
       title: "🍔 ¡Fin de tu hora de Almuerzo!",
       body: "Tu descanso de almuerzo ha finalizado. Debes reanudar tu turno.",
-      delay: const Duration(hours: 1), // O segundos para pruebas rápidas
+      delay: const Duration(hours: 1),
     );
 
     _lunchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -269,7 +222,6 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Acción para Iniciar Almuerzo
   Future<String?> iniciarAlmuerzo() async {
     if (_isLoading) return null;
     _isLoading = true;
@@ -277,7 +229,6 @@ class HomeProvider extends ChangeNotifier {
 
     try {
       final position = await _locationService.getCurrentLocation();
-      // Asegúrate de castear el repositorio a ApiDriverRepository si es necesario o declararlo en la interfaz
       final res = await _driverRepository.iniciarAlmuerzo(
         lat: position?.latitude ?? _currentPosition?.latitude,
         lng: position?.longitude ?? _currentPosition?.longitude,
@@ -286,12 +237,11 @@ class HomeProvider extends ChangeNotifier {
       if (res['status'] == 'success') {
         _turnoEstado = 'ALMUERZO';
         _isOnline = false;
-        _alreadyHadLunch = true; // 🟢 ALMUERZO UTILIZADO
+        _alreadyHadLunch = true;
 
-        _stopTracking();
+        _stopHeartbeat();
         _stopListeningTrips();
 
-        // Iniciar reloj de 1 hora
         _startLunchTimer();
 
         _isLoading = false;
@@ -299,7 +249,6 @@ class HomeProvider extends ChangeNotifier {
         return null;
       }
 
-      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
       if (res.containsKey('message')) {
         return res['message'].toString();
       }
@@ -308,11 +257,10 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return _extractExceptionMessage(e); // 🟢 Cambiado aquí
+      return _extractExceptionMessage(e);
     }
   }
 
-  // Modifica reanudarTurnoCompleto() para apagar el temporizador de almuerzo si estaba activo:
   Future<String?> reanudarTurnoCompleto() async {
     if (_isLoading) return null;
     _isLoading = true;
@@ -327,20 +275,18 @@ class HomeProvider extends ChangeNotifier {
 
       if (res['status'] == 'success') {
         _turnoEstado = 'ACTIVO';
-        _isOnline = true; // El conductor está en línea listo para viajes
-        _alreadyHadLunch = false; // 🟢 RESET PARA NUEVA JORNADA
+        _isOnline = true;
+        _alreadyHadLunch = false;
 
-        // Encender rastreo en tiempo real
         _startListeningTrips();
         _startTracking();
         _startRouteRecalculationTimer();
 
         _isLoading = false;
         notifyListeners();
-        return null; // Éxito
+        return null;
       }
 
-      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
       if (res.containsKey('message')) {
         return res['message'].toString();
       }
@@ -349,38 +295,31 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return _extractExceptionMessage(
-        e,
-      ); // 🟢 Cambiado aquí para disparar la alerta
+      return _extractExceptionMessage(e);
     }
   }
 
-  /// Inicia el temporizador de cuenta regresiva del break (CONFIGURADO A 10 SEGUNDOS PARA PRUEBA)
   void _startBreakTimer() {
     _breakTimer?.cancel();
-    _breakSecondsRemaining = 900; // 🟢 Cambiado temporalmente de 900 a 10
+    _breakSecondsRemaining = 900;
     _breakStartTime = DateTime.now();
 
-    // Programamos la alarma nativa para dentro de 10 segundos
     NotificationService.scheduleNotification(
       id: 999,
       title: "¡Fin de tu Break de 15 min!",
       body: "Debes reanudar tu turno o terminar el turno de inmediato.",
-      delay: const Duration(minutes: 15), // 🟢 15 minutos
+      delay: const Duration(minutes: 15),
     );
 
     _breakTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_breakStartTime != null) {
         final elapsed = DateTime.now().difference(_breakStartTime!).inSeconds;
-
-        // 🟢 Cambiado temporalmente de 900 a 10 para que la pantalla llegue a cero en 10 segundos
         _breakSecondsRemaining = 900 - elapsed;
 
         if (_breakSecondsRemaining <= 0) {
           _breakSecondsRemaining = 0;
           _stopBreakTimer();
 
-          // Alarma de respaldo por si el conductor tiene la app abierta en primer plano
           NotificationService.showNotification(
             id: 999,
             title: "¡Fin de tu Break de 15 min!",
@@ -392,19 +331,14 @@ class HomeProvider extends ChangeNotifier {
     });
   }
 
-  /// Cancela el temporizador de la pausa
   void _stopBreakTimer() {
     _breakTimer?.cancel();
     _breakTimer = null;
     _breakStartTime = null;
-
-    // 🟢 NUEVO: Si el conductor reanuda o termina el turno antes de los 15 minutos,
-    // cancelamos la alarma programada para que no suene de manera molesta después.
     NotificationService.cancelNotification(999);
     notifyListeners();
   }
 
-  /// A. INICIAR TURNO (Kilometraje + Foto inicial del tablero)
   Future<String?> iniciarTurnoCompleto({
     required int kilometraje,
     required File foto,
@@ -423,10 +357,8 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Validar documentos locales antes de conectar
       await _checkDocumentsValidity();
 
-      // Obtener ubicación GPS actual
       final position = await _locationService.getCurrentLocation();
       if (position != null) {
         _currentPosition = LatLng(position.latitude, position.longitude);
@@ -435,7 +367,6 @@ class HomeProvider extends ChangeNotifier {
       debugPrint(
         "API_DEBUG_PROVIDER: Enviando petición HTTP a iniciarTurno...",
       );
-      // Llamar al endpoint del backend
       final res = await _driverRepository.iniciarTurno(
         idVehiculo: _selectedVehicle!.id,
         kilometraje: kilometraje,
@@ -449,20 +380,18 @@ class HomeProvider extends ChangeNotifier {
 
       if (res['status'] == 'success') {
         _turnoEstado = 'ACTIVO';
-        _isOnline = true; // El conductor está en línea listo para viajes
-        _alreadyHadLunch = false; // 🟢 RESET PARA NUEVA JORNADA
+        _isOnline = true;
+        _alreadyHadLunch = false;
 
-        // Encender rastreo en tiempo real
         _startListeningTrips();
         _startTracking();
         _startRouteRecalculationTimer();
 
         _isLoading = false;
         notifyListeners();
-        return null; // Éxito
+        return null;
       }
 
-      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
       if (res.containsKey('message')) {
         final backendMessage = res['message'].toString();
         debugPrint(
@@ -486,18 +415,11 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // 🟢 NUEVO MÉTODO: Fuerza el estado offline localmente (Usado por Sockets en tiempo real)
   void forzarEstadoOffline() {
-    // NOTA: Reemplace '_turnoEstado' por el nombre de la variable interna real
-    // que use en su HomeProvider para almacenar el estado del turno (ej: 'turnoEstado', '_estado', etc.)
     _turnoEstado = 'OFFLINE';
-
-    // Opcional: Limpiar datos temporales del turno si los tiene en el provider
-    notifyListeners(); // Redibuja la interfaz de inmediato
+    notifyListeners();
   }
 
-  // 🟢 NUEVO MÉTODO: Sincroniza con el servidor (Usado al volver a la app / resumed)
-  // 🟢 CORREGIDO: Sincroniza usando el método real 'obtenerTurnoActivo'
   Future<void> verificarTurnoActivoConServidor() async {
     try {
       final turnoData = await _driverRepository.obtenerTurnoActivo();
@@ -514,7 +436,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  /// B. PAUSAR TURNO / INICIAR BREAK (Desconexión de 15 minutos)
   Future<String?> iniciarBreak() async {
     if (_isLoading) return null;
     _isLoading = true;
@@ -529,13 +450,11 @@ class HomeProvider extends ChangeNotifier {
 
       if (res['status'] == 'success') {
         _turnoEstado = 'BREAK';
-        _isOnline = false; // Desconectado temporalmente
+        _isOnline = false;
 
-        // Detener rastreo temporalmente durante la pausa
-        _stopTracking();
+        _stopHeartbeat();
         _stopListeningTrips();
 
-        // Lanzar el temporizador de 15 minutos
         _startBreakTimer();
 
         _isLoading = false;
@@ -546,19 +465,15 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return _extractExceptionMessage(e); // 🟢 Cambiado aquí
+      return _extractExceptionMessage(e);
     }
   }
 
-  /// C. REANUDAR TURNO (Fin de pausa, volver a estar activo para viajes)
-
-  /// D. TERMINAR TURNO (Kilometraje final + Foto final del tablero)
-  /// D. TERMINAR TURNO (Kilometraje final + Foto final del tablero + Comprobantes opcionales)
   Future<String?> terminarTurnoCompleto({
     required int kilometraje,
     required File foto,
-    List<File>? comprobantesFotos, // 🟢 NUEVO: Parámetro opcional
-    List<double>? comprobantesValores, // 🟢 NUEVO: Parámetro opcional
+    List<File>? comprobantesFotos,
+    List<double>? comprobantesValores,
   }) async {
     if (_isLoading) return null;
     _isLoading = true;
@@ -571,20 +486,18 @@ class HomeProvider extends ChangeNotifier {
         foto: foto,
         lat: position?.latitude ?? _currentPosition?.latitude,
         lng: position?.longitude ?? _currentPosition?.longitude,
-        comprobantesFotos:
-            comprobantesFotos, // 🟢 Enviar fotos de peajes/gasolina
-        comprobantesValores: comprobantesValores, // 🟢 Enviar valores digitados
+        comprobantesFotos: comprobantesFotos,
+        comprobantesValores: comprobantesValores,
       );
 
       if (res['status'] == 'success') {
         _turnoEstado = 'OFFLINE';
         _isOnline = false;
 
-        // Detener de forma definitiva todas las conexiones y rastreos de la jornada
         _stopBreakTimer();
         _stopLunchTimer();
         _stopListeningTrips();
-        _stopTracking();
+        _stopHeartbeat();
         _activeTrip = null;
         _routePoints = [];
         await _storageService.clearCurrentTrip();
@@ -594,7 +507,6 @@ class HomeProvider extends ChangeNotifier {
         return null;
       }
 
-      // 🟢 CAPA DE SEGURIDAD: Si la respuesta no es success pero trae un mensaje del backend, lo usamos
       if (res.containsKey('message')) {
         return res['message'].toString();
       }
@@ -603,9 +515,7 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       notifyListeners();
-      return _extractExceptionMessage(
-        e,
-      ); // 🟢 Cambiado aquí para extraer el error real
+      return _extractExceptionMessage(e);
     }
   }
 
@@ -617,7 +527,7 @@ class HomeProvider extends ChangeNotifier {
       if (_activeTrip != null) {
         _calculateRouteForCurrentStatus();
       } else {
-        _stopRouteRecalculationTimer(); // 🟢 Corrección aquí (añadir "ion")
+        _stopRouteRecalculationTimer();
       }
     });
   }
@@ -629,7 +539,7 @@ class HomeProvider extends ChangeNotifier {
 
   void _startWaitTimer(Trip trip) {
     _waitTimer?.cancel();
-    _waitSeconds = 300; // Iniciamos con el límite de 5 minutos
+    _waitSeconds = 300;
 
     _waitTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_waitSeconds > 0) {
@@ -650,18 +560,14 @@ class HomeProvider extends ChangeNotifier {
 
   void _showError(String message) {
     debugPrint("🚩 ERROR: $message");
-    // Si quieres que aparezca un SnackBar, necesitarías pasar el context
-    // o usar un GlobalKey<ScaffoldMessengerState>
   }
 
-  double get balance => _balance; // Necesario para el bloqueo
+  double get balance => _balance;
   void updateBalance(double newBalance) {
     _balance = newBalance;
     notifyListeners();
   }
 
-  // Agrega este método dentro de tu clase HomeProvider:
-  // Reemplace el método anterior en home_provider.dart por este real:
   Future<void> addExtraWaitingTime(int minutes) async {
     final trip = activeTrip;
     if (trip == null) return;
@@ -680,9 +586,7 @@ class HomeProvider extends ChangeNotifier {
       if (response.statusCode == 200) {
         debugPrint("🟢 Tiempo extra registrado con éxito en el backend.");
         _extraWaitingTimeAdded = true;
-        _waitSeconds +=
-            (minutes *
-            60); // 🟢 Se suman los minutos de espera extra al contador activo
+        _waitSeconds += (minutes * 60);
         notifyListeners();
       } else {
         throw Exception(
@@ -698,19 +602,12 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // Variable privada que almacenará el GPS en tiempo real cuando se reciba
   LatLng? _passengerLocation;
-  bool _hasReceivedPassengerGps =
-      false; // Guardián de señal de socket en tiempo real
+  bool _hasReceivedPassengerGps = false;
 
-  // Propiedad que lee Flutter: si no hay GPS en tiempo real aún,
-  // usa automáticamente el punto de encuentro con un desfase de prueba si está en ARRIVED
   LatLng? get passengerLocation {
     if (_passengerLocation == null) return null;
 
-    // Si estamos esperando en el sitio pero el socket en vivo no ha reportado señal aún,
-    // desplazamos visualmente al pasajero ~45 metros para que la línea de bolitas y el marcador
-    // se aprecien perfectamente desde el primer instante en tus pruebas.
     if (!_hasReceivedPassengerGps &&
         _activeTrip != null &&
         _activeTrip!.status == TripStatus.ARRIVED) {
@@ -722,32 +619,27 @@ class HomeProvider extends ChangeNotifier {
     return _passengerLocation;
   }
 
-  // Permite actualizar el GPS en tiempo real y notificar a la interfaz
   set passengerLocation(LatLng? value) {
     _passengerLocation = value;
     notifyListeners();
   }
 
-  // 2. Método para limpiar el timer cuando ya no haga falta
   void _stopValidationTimer() {
     _validationTimer?.cancel();
     _validationTimer = null;
   }
 
-  // Método para asegurar que no se pierdan datos críticos (como el teléfono)
-  // en las respuestas simplificadas de cambio de estado del servidor.
-  // 🟢 BLINDAJE EXTREMO: Evita que datos parciales de WebSockets corrompan los datos completos en memoria
   void _updateActiveTripWithPreservation(Trip? newTrip) {
     if (newTrip == null) {
       _activeTrip = null;
       _extraWaitingTimeAdded = false;
-      _stopWaitTimer(); // <-- Detener timer al limpiar
+      _stopWaitTimer();
       return;
     }
 
     if (_activeTrip != null && _activeTrip!.id != newTrip.id) {
       _extraWaitingTimeAdded = false;
-      _stopWaitTimer(); // <-- Detener para nuevo viaje
+      _stopWaitTimer();
     }
 
     if (_activeTrip != null && _activeTrip!.id == newTrip.id) {
@@ -794,7 +686,6 @@ class HomeProvider extends ChangeNotifier {
       _totalRouteDurationSeconds = 0.0;
     }
 
-    // 🟢 CONTROL DE INICIO DEL TIMER DE ESPERA
     if (_activeTrip != null &&
         _activeTrip!.status == TripStatus.ARRIVED &&
         _waitTimer == null) {
@@ -805,20 +696,17 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // 3. Método de validación que llamaremos al recibir una oferta
   void _startValidationTimer(String assignmentId) {
     _stopValidationTimer();
 
     _validationTimer = Timer.periodic(const Duration(seconds: 10), (
       timer,
     ) async {
-      // Si no hay oferta, matamos el timer
       if (_incomingTrip == null) {
         _stopValidationTimer();
         return;
       }
 
-      // Consultamos al servidor si esa asignación sigue pendiente
       try {
         final response = await _tripRepository.checkAssignmentStatus(
           assignmentId,
@@ -829,7 +717,7 @@ class HomeProvider extends ChangeNotifier {
           );
           _incomingTrip = null;
           _stopValidationTimer();
-          notifyListeners(); // Esto cerrará el modal automáticamente
+          notifyListeners();
         }
       } catch (e) {
         debugPrint("Error validando oferta: $e");
@@ -847,15 +735,6 @@ class HomeProvider extends ChangeNotifier {
       );
       _incomingDistance = routeResult.distanceMeters.toDouble();
 
-      // 🔥 CAMBIO: Solo asignamos los puntos si NO hay viaje entrante
-      // O si quieres borrarlos:
-      if (incomingTrip != null) {
-        // Si hay oferta, NO guardamos los puntos en la lista global que usa el mapa
-        // Pero si quieres que el conductor la vea luego de aceptar,
-        // esto es lo que está pasando.
-      }
-
-      // Si quieres que el mapa esté vacío mientras llega la oferta:
       routePoints = [];
 
       int minutes = (routeResult.durationSeconds / 60).round();
@@ -867,7 +746,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // --- AÑADIR DESPUÉS DE LA LÍNEA 65 ---
   double get remainingDistanceMeters {
     if (_currentPosition == null || _activeTrip == null) return 0.0;
     const Distance distance = Distance();
@@ -881,7 +759,6 @@ class HomeProvider extends ChangeNotifier {
     return distance.as(LengthUnit.Meter, _currentPosition!, target);
   }
 
-  // Getter de distancia formateado dinámico (Alineado al 100% con Pasajero)
   String get distanceToTarget {
     if (_currentPosition == null || _activeTrip == null) return "---";
 
@@ -894,7 +771,6 @@ class HomeProvider extends ChangeNotifier {
     double streetMeters = 0.0;
 
     if (_routePoints.isNotEmpty) {
-      // Distancia desde el auto hasta el primer punto de la polilínea restante
       streetMeters += Geolocator.distanceBetween(
         _currentPosition!.latitude,
         _currentPosition!.longitude,
@@ -902,7 +778,6 @@ class HomeProvider extends ChangeNotifier {
         _routePoints.first.longitude,
       );
 
-      // Suma de los segmentos restantes de la polilínea
       for (int i = 0; i < _routePoints.length - 1; i++) {
         streetMeters += Geolocator.distanceBetween(
           _routePoints[i].latitude,
@@ -912,7 +787,6 @@ class HomeProvider extends ChangeNotifier {
         );
       }
     } else {
-      // Fallback por si la ruta de OSRM aún no ha cargado
       double straightMeters = Geolocator.distanceBetween(
         _currentPosition!.latitude,
         _currentPosition!.longitude,
@@ -930,7 +804,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // Getter de duración dinámico (Sincronizado con Pasajero y Google Maps)
   double get activeTripDuration {
     if (_currentPosition == null || _activeTrip == null) return 0.0;
 
@@ -967,7 +840,6 @@ class HomeProvider extends ChangeNotifier {
       streetMeters = straightMeters * 1.43;
     }
 
-    // Filtro para evitar residuos de la fase de recogida
     bool isStale =
         _activeTrip!.status == TripStatus.STARTED &&
         (_totalRouteDistanceMeters < streetMeters ||
@@ -982,8 +854,6 @@ class HomeProvider extends ChangeNotifier {
       if (ratio < 0.0) ratio = 0.0;
       calculatedMinutes = (_totalRouteDurationSeconds * ratio) / 60.0;
     } else {
-      // Velocidad unificada de estimación real en ciudad con tráfico a 13.5 km/h (225 metros/minuto)
-      // Esto garantiza sincronización perfecta con Google Maps (4 min para ~850-900 metros)
       calculatedMinutes = streetMeters / 225.0;
     }
 
@@ -996,17 +866,11 @@ class HomeProvider extends ChangeNotifier {
 
     return mins.toDouble();
   }
-  // =======================================================
-  // A. INICIALIZACIÓN Y GPS
-  // =======================================================
-
-  // En HomeProvider.dart:
 
   Future<void> initLocation() async {
     _isLoading = true;
     notifyListeners();
 
-    // 🔴 BLINDAJE OFFLINE: Recuperar inmediatamente la última posición registrada en disco
     try {
       debugPrint(
         "💾 [HomeProvider - INIT] Leyendo última posición del disco persistente...",
@@ -1043,7 +907,6 @@ class HomeProvider extends ChangeNotifier {
       });
       _startListeningWalletUpdates(authProvider.user!.id);
 
-      // 🟢 NUEVO BLINDAJE DE SEGURIDAD: RESTAURAR EL ESTADO DEL TURNO DESDE EL SERVIDOR
       try {
         final turnoData = await _driverRepository.obtenerTurnoActivo();
         if (turnoData['status'] == 'success' &&
@@ -1058,12 +921,9 @@ class HomeProvider extends ChangeNotifier {
             _startRouteRecalculationTimer();
           } else if (_turnoEstado == 'BREAK') {
             _isOnline = false;
-            _breakSecondsRemaining =
-                turnoData['segundos_restantes'] ??
-                900; // O 900 según tus pruebas
+            _breakSecondsRemaining = turnoData['segundos_restantes'] ?? 900;
 
             if (_breakSecondsRemaining > 0) {
-              // Reconstruimos la hora de inicio simulada para mantener sincronizado el reloj
               _breakStartTime = DateTime.now().subtract(
                 Duration(seconds: 900 - _breakSecondsRemaining),
               );
@@ -1074,9 +934,7 @@ class HomeProvider extends ChangeNotifier {
                   final elapsed = DateTime.now()
                       .difference(_breakStartTime!)
                       .inSeconds;
-                  _breakSecondsRemaining =
-                      900 -
-                      elapsed; // Usar 900 si restauras a modo de producción
+                  _breakSecondsRemaining = 900 - elapsed;
                   if (_breakSecondsRemaining <= 0) {
                     _breakSecondsRemaining = 0;
                     _stopBreakTimer();
@@ -1135,37 +993,54 @@ class HomeProvider extends ChangeNotifier {
 
     final savedTrip = await _storageService.getCurrentTrip();
     if (savedTrip != null) {
-      final tripReal = await _tripRepository.getActiveTrip();
-
-      if (tripReal != null && tripReal.id == savedTrip.id) {
-        _activeTrip = tripReal.copyWith(
-          passengerPhone:
-              (tripReal.passengerPhone == null ||
-                  tripReal.passengerPhone!.isEmpty)
-              ? savedTrip.passengerPhone
-              : tripReal.passengerPhone,
-          passengers: tripReal.passengers.isEmpty
-              ? savedTrip.passengers
-              : tripReal.passengers,
-          fuecUrl: (tripReal.fuecUrl == null || tripReal.fuecUrl!.isEmpty)
-              ? savedTrip.fuecUrl
-              : tripReal.fuecUrl,
+      try {
+        final tripReal = await _tripRepository.getActiveTrip().timeout(
+          const Duration(seconds: 4),
         );
+
+        if (tripReal != null && tripReal.id == savedTrip.id) {
+          _activeTrip = tripReal.copyWith(
+            passengerPhone:
+                (tripReal.passengerPhone == null ||
+                    tripReal.passengerPhone!.isEmpty)
+                ? savedTrip.passengerPhone
+                : tripReal.passengerPhone,
+            passengers: tripReal.passengers.isEmpty
+                ? savedTrip.passengers
+                : tripReal.passengers,
+            fuecUrl: (tripReal.fuecUrl == null || tripReal.fuecUrl!.isEmpty)
+                ? savedTrip.fuecUrl
+                : tripReal.fuecUrl,
+          );
+          _isOnline = true;
+          _startListeningTrips();
+          _passengerLocation = tripReal.originLocation;
+          _startPassengerGpsListener(_activeTrip!.id);
+          _startRouteRecalculationTimer();
+          await _calculateRouteForCurrentStatus();
+        } else if (tripReal == null) {
+          await _storageService.clearCurrentTrip();
+          _activeTrip = null;
+        }
+      } catch (e) {
+        debugPrint(
+          "📡 [OFFLINE] Error de conexión con el servidor. Restaurando viaje de almacenamiento local: $e",
+        );
+
+        _activeTrip = savedTrip;
         _isOnline = true;
         _startListeningTrips();
-        _passengerLocation = tripReal.originLocation;
-        _startPassengerGpsListener(_activeTrip!.id);
+        _passengerLocation = savedTrip.originLocation;
         _startRouteRecalculationTimer();
         await _calculateRouteForCurrentStatus();
-      } else {
-        await _storageService.clearCurrentTrip();
-        _activeTrip = null;
       }
     } else {
       try {
-        final tripReal = await _tripRepository.getActiveTrip();
+        final tripReal = await _tripRepository.getActiveTrip().timeout(
+          const Duration(seconds: 4),
+        );
+
         if (tripReal != null) {
-          // 🚨 FILTRO: Si el viaje tiene estado SCHEDULED_ASSIGNED, lo ignoramos para que no tome el mapa al iniciar
           if (tripReal.status.toString().contains('SCHEDULED_ASSIGNED')) {
             _activeTrip = null;
           } else {
@@ -1180,7 +1055,9 @@ class HomeProvider extends ChangeNotifier {
           }
         }
       } catch (e) {
-        debugPrint("Error buscando viaje activo de respaldo en inicio: $e");
+        debugPrint(
+          "Error buscando viaje activo de respaldo offline en inicio: $e",
+        );
       }
     }
 
@@ -1191,15 +1068,13 @@ class HomeProvider extends ChangeNotifier {
         _currentPosition = LatLng(position.latitude, position.longitude);
         _currentHeading = position.heading;
       }
-      if (_isOnline) {
-        _startTracking();
-      }
+      // Arranca el rastreador de GPS local inmediatamente sin importar el estado
+      _startTracking();
     }
     _isLoading = false;
     notifyListeners();
   }
 
-  // 🟢 ACTUALIZADO: Ignora SCHEDULED_ASSIGNED al encender el turno
   Future<String?> toggleOnlineStatus() async {
     if (_isLoading) return null;
 
@@ -1245,11 +1120,11 @@ class HomeProvider extends ChangeNotifier {
         if (_isOnline) {
           _startListeningTrips();
           _startTracking();
+          _startHeartbeat(); // 🟢 NUEVO: Encender envío de red
 
           try {
             final tripReal = await _tripRepository.getActiveTrip();
             if (tripReal != null) {
-              // 🚨 FILTRO: Ignoramos el programado para no tomar la pantalla al conectarse
               if (tripReal.status.toString().contains('SCHEDULED_ASSIGNED')) {
                 _activeTrip = null;
               } else {
@@ -1266,7 +1141,7 @@ class HomeProvider extends ChangeNotifier {
           }
         } else {
           _stopListeningTrips();
-          _stopTracking();
+          _stopHeartbeat();
           _activeTrip = null;
           _routePoints = [];
           await _storageService.clearCurrentTrip();
@@ -1283,12 +1158,24 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // 🟢 NUEVO: Inicia la ruta hacia el origen desde la lista manual de viajes programados
-  // 🟢 ACTUALIZADO Y BLINDADO: Inicia la ruta preservando toda la información detallada del viaje programado
   Future<bool> iniciarRutaAlOrigenConViaje(Trip trip) async {
+    if (_selectedVehicle == null) {
+      _showError(
+        "⚠️ Debes seleccionar o tener un vehículo activo para iniciar.",
+      );
+      return false;
+    }
+
+    if (trip.vehicleId != null &&
+        _selectedVehicle!.id.toString() != trip.vehicleId.toString()) {
+      _showError(
+        "⚠️ No puedes iniciar este viaje. El vehículo que tienes activo actualmente (${_selectedVehicle!.plate}) no coincide con el vehículo asignado legalmente para este servicio.",
+      );
+      return false;
+    }
+
     _isLoading = true;
-    _activeTrip =
-        trip; // 1. Cargamos de forma segura el viaje detallado en memoria
+    _activeTrip = trip;
     notifyListeners();
 
     try {
@@ -1297,8 +1184,6 @@ class HomeProvider extends ChangeNotifier {
         'ACCEPTED',
       );
 
-      // 2. 🟢 SOLUCIÓN: En lugar de sobreescribir directo, usamos preservación blindada
-      // Esto filtra la respuesta parcial de la API y mantiene las direcciones y coordenadas reales intactas.
       _updateActiveTripWithPreservation(updatedTrip);
 
       await _storageService.saveCurrentTrip(_activeTrip!);
@@ -1320,13 +1205,9 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  void _startTracking() {
-    _positionSubscription?.cancel().catchError((error) {
-      debugPrint("ℹ️ Silenciando reinicio de canal de GPS: $error");
-    });
-    _heartbeatTimer?.cancel(); // Limpiar anterior
-
-    // Timer que avisa al server cada 30 seg aunque estés quieto
+  /// Inicia el reporte constante de presencia hacia el servidor
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (_isOnline && _activeTrip == null && _currentPosition != null) {
         _driverRepository.updatePosition(
@@ -1335,34 +1216,89 @@ class HomeProvider extends ChangeNotifier {
         );
       }
     });
-
-    _positionSubscription = _locationService.getPositionStream().listen((pos) {
-      _updatePosition(pos);
-    });
-    _startNetworkMonitor();
   }
 
+  /// Apaga el reporte de presencia al servidor
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  // 1. Añade esta propiedad en la sección de estado de HomeProvider
+  TrackingProfile _currentProfile = TrackingProfile.offline;
+  TrackingProfile get currentProfile => _currentProfile;
+
+  // 2. Método auxiliar para evaluar cuál es el perfil que la aplicación exige en este instante
+  TrackingProfile _determineRequiredProfile() {
+    // Si hay un viaje activo en fase de transporte o recogida, se exige perfil de viaje
+    if (_activeTrip != null) {
+      final status = _activeTrip!.status;
+      if (status == TripStatus.ACCEPTED ||
+          status == TripStatus.ARRIVED ||
+          status == TripStatus.STARTED) {
+        return TrackingProfile.activeTrip;
+      }
+    }
+
+    // Si el conductor tiene el turno activo y está conectado en línea
+    if (_turnoEstado == 'ACTIVO' && _isOnline) {
+      return TrackingProfile.onlineIdle;
+    }
+
+    // Por defecto (Offline, Break, Almuerzo)
+    return TrackingProfile.offline;
+  }
+
+  // 3. Modifica _startTracking para que evalúe y reactive el stream dinámicamente
+  void _startTracking() {
+    final requiredProfile = _determineRequiredProfile();
+    debugPrint("🔋 [GPS CONTROL] Solicitando perfil: ${requiredProfile.name}");
+
+    // Si ya estamos transmitiendo bajo este perfil exacto, evitamos sobrecargar el hardware reiniciando el stream
+    if (_positionSubscription != null && _currentProfile == requiredProfile) {
+      return;
+    }
+
+    _currentProfile = requiredProfile;
+
+    // Cancelamos la suscripción anterior de manera segura antes de levantar la nueva
+    _positionSubscription?.cancel().catchError((error) {
+      debugPrint("ℹ️ Silenciando reinicio de canal de GPS: $error");
+    });
+
+    _positionSubscription = _locationService
+        .getPositionStream(profile: _currentProfile)
+        .listen((pos) {
+          _updatePosition(pos);
+        });
+
+    // Si está en línea, iniciamos también el reporte periódico de presencia para la administración
+    if (_isOnline) {
+      _startHeartbeat();
+    } else {
+      _stopHeartbeat();
+    }
+  }
+
+  // 4. Reemplaza el método _updatePosition en tu HomeProvider por esta versión inteligente
   void _updatePosition(Position pos) async {
     final newLocation = LatLng(pos.latitude, pos.longitude);
 
-    // 🔴 BLINDAJE DE ACTUALIZACIÓN CONSTANTE: Guardar en disco persistente a cada rato
+    // A. Guardamos la última posición en disco local como respaldo inmediato de UI
     try {
       await _storageService.saveLastPosition(pos.latitude, pos.longitude);
-      debugPrint(
-        "🔄 [GPS STREAM UPDATE] Persistiendo coordenada actual de forma constante: (${pos.latitude}, ${pos.longitude})",
-      );
     } catch (ex) {
-      debugPrint(
-        "🚨 [GPS STREAM UPDATE] Fallo en la persistencia constante: $ex",
-      );
+      debugPrint("🚨 [GPS STORAGE] Fallo de persistencia rápida: $ex");
     }
 
-    if (pos.accuracy > 80.0) {
+    // B. CONTROL DE PRECISIÓN: Si la señal de GPS es sumamente débil (baja precisión espacial),
+    // se reporta a la interfaz de usuario pero NO se envía al backend para evitar saltos locos en el mapa del cliente
+    if (pos.accuracy > 45.0) {
       if (!_isGpsSignalLost) {
         _isGpsSignalLost = true;
         notifyListeners();
       }
-      return; // No procesamos coordenadas inexactas para no distorsionar el mapa del pasajero
+      return; // Ignoramos la coordenada imprecisa para envíos de red
     } else {
       if (_isGpsSignalLost) {
         _isGpsSignalLost = false;
@@ -1370,42 +1306,50 @@ class HomeProvider extends ChangeNotifier {
       }
     }
 
+    // C. CÁLCULO DE DESPLAZAMIENTO REAL
     if (_currentPosition != null) {
-      final Distance distance = const Distance();
+      const Distance distance = Distance();
       final double dist = distance.as(
         LengthUnit.Meter,
         _currentPosition!,
         newLocation,
       );
 
-      // 1. Si está ONLINE pero NO está en un servicio activo
-      if (_isOnline && _activeTrip == null && dist > 10.0) {
-        _sendPositionToBackend(pos.latitude, pos.longitude);
-      }
+      // FILTRO PREMIUM DE MOVIMIENTO:
+      // Si el conductor está detenido (velocidad casi nula o movimiento menor a 2 metros),
+      // ignoramos el reporte hacia el servidor para conservar batería y paquete de datos.
+      final bool estaInmovil = pos.speed < 0.25 && dist < 2.0;
 
-      // 2. Si está en un viaje activo, transmitir de manera resiliente
-      if (_activeTrip != null) {
-        final bool enServicioActivo =
-            _activeTrip!.status == TripStatus.ACCEPTED ||
-            _activeTrip!.status == TripStatus.ARRIVED ||
-            _activeTrip!.status == TripStatus.STARTED;
-
-        if (enServicioActivo && dist > 5.0) {
-          _sendTripLocationToBackend(
-            _activeTrip!.id,
-            pos.latitude,
-            pos.longitude,
-            pos.speed,
-          );
-          _calculateRouteForCurrentStatus();
+      if (!estaInmovil) {
+        // 1. Reporte en estado de espera (Online pero sin viaje)
+        if (_isOnline && _activeTrip == null && dist > 12.0) {
+          _sendPositionToBackend(pos.latitude, pos.longitude);
         }
-      }
 
-      // Estabilización del rumbo
-      if (dist > 1.5) {
-        _currentHeading = _calculateBearing(_currentPosition!, newLocation);
-      } else if (pos.heading > 0) {
-        _currentHeading = pos.heading;
+        // 2. Reporte en viaje activo
+        if (_activeTrip != null) {
+          final bool enServicioActivo =
+              _activeTrip!.status == TripStatus.ACCEPTED ||
+              _activeTrip!.status == TripStatus.ARRIVED ||
+              _activeTrip!.status == TripStatus.STARTED;
+
+          if (enServicioActivo && dist > 3.0) {
+            _sendTripLocationToBackend(
+              _activeTrip!.id,
+              pos.latitude,
+              pos.longitude,
+              pos.speed,
+            );
+            _calculateRouteForCurrentStatus();
+          }
+        }
+
+        // Calculamos el rumbo (bearing) solo si el desplazamiento es físico y real
+        if (dist > 1.8) {
+          _currentHeading = _calculateBearing(_currentPosition!, newLocation);
+        } else if (pos.heading > 0) {
+          _currentHeading = pos.heading;
+        }
       }
     }
 
@@ -1413,20 +1357,15 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- MÉTODOS DE ENVÍO CON TOLERANCIA A ERRORES ---
-
   Future<void> _sendPositionToBackend(double lat, double lng) async {
-    final hasInternet = await _hasInternetConnection();
-    if (!hasInternet) {
-      _setNetworkDisconnected(true);
-      return;
-    }
+    debugPrint(
+      "📡 [RED SEND] En espera. Enviando posición al servidor: ($lat, $lng)",
+    );
 
     try {
       await _driverRepository.updatePosition(lat, lng);
       _setNetworkDisconnected(false);
     } catch (e) {
-      // El envío falló por timeout o error de red transitorio
       _setNetworkDisconnected(true);
     }
   }
@@ -1437,11 +1376,18 @@ class HomeProvider extends ChangeNotifier {
     double lng,
     double speed,
   ) async {
-    final hasInternet = await _hasInternetConnection();
-    if (!hasInternet) {
-      _setNetworkDisconnected(true);
-      return;
-    }
+    debugPrint(
+      "🏎️ [RED SEND] En viaje activo. Enviando tracking al servidor: ($lat, $lng) a $speed m/s",
+    );
+
+    final Map<String, dynamic> coordinatePayload = {
+      'tripId': tripId,
+      'lat': lat,
+      'lng': lng,
+      'speed': speed,
+      'bearing': _currentHeading,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
 
     try {
       await _tripRepository.updateLocation(
@@ -1451,29 +1397,61 @@ class HomeProvider extends ChangeNotifier {
         speed: speed,
         bearing: _currentHeading,
       );
+
       _setNetworkDisconnected(false);
+
+      if (_offlineTrackingBuffer.isNotEmpty) {
+        _syncOfflineTrackingBuffer();
+      }
     } catch (e) {
       _setNetworkDisconnected(true);
+
+      if (_offlineTrackingBuffer.length < 500) {
+        _offlineTrackingBuffer.add(coordinatePayload);
+        debugPrint(
+          "💾 [GPS OFFLINE] Coordenada guardada en búfer local. Total en cola: ${_offlineTrackingBuffer.length}",
+        );
+      }
     }
   }
 
-  void _stopTracking() {
-    _positionSubscription?.cancel().catchError((error) {
-      debugPrint("ℹ️ Silenciando canal de GPS ya inactivo: $error");
-    });
-    _positionSubscription = null;
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
-    _stopNetworkMonitor();
-    _setNetworkDisconnected(false);
-    _isGpsSignalLost = false;
-    notifyListeners();
+  Future<void> _syncOfflineTrackingBuffer() async {
+    if (_isSyncingBuffer || _offlineTrackingBuffer.isEmpty) return;
+    _isSyncingBuffer = true;
+
+    debugPrint(
+      "🔄 [GPS OFFLINE] Iniciando sincronización de ${_offlineTrackingBuffer.length} puntos acumulados...",
+    );
+
+    try {
+      while (_offlineTrackingBuffer.isNotEmpty) {
+        final Map<String, dynamic> pendingPoint = _offlineTrackingBuffer.first;
+        final String tripId = pendingPoint['tripId'].toString();
+
+        await _tripRepository.updateLocation(
+          tripId,
+          pendingPoint['lat'],
+          pendingPoint['lng'],
+          speed: pendingPoint['speed'],
+          bearing: pendingPoint['bearing'],
+        );
+
+        _offlineTrackingBuffer.removeAt(0);
+      }
+      _setNetworkDisconnected(false);
+      debugPrint("✅ [GPS OFFLINE] Búfer offline sincronizado por completo.");
+    } catch (e) {
+      _setNetworkDisconnected(true);
+      debugPrint(
+        "🚨 [GPS OFFLINE] Sincronización interrumpida debido a inestabilidad de red.",
+      );
+    } finally {
+      _isSyncingBuffer = false;
+      notifyListeners();
+    }
   }
 
   Future<void> loadVehicles() async {
-    // BORRA O COMENTA ESTA LÍNEA:
-    // if (_myVehicles.isNotEmpty) return;
-
     try {
       _isLoading = true;
       notifyListeners();
@@ -1481,11 +1459,9 @@ class HomeProvider extends ChangeNotifier {
       _myVehicles = await _driverRepository.getAssignedVehicles(userId);
 
       if (_myVehicles.isNotEmpty) {
-        // Si no hay vehículo seleccionado, auto-selecciona el primero
         if (_selectedVehicle == null) {
           _selectedVehicle = _myVehicles.first;
         } else {
-          // Opcional: Verifica si el seleccionado sigue existiendo
           bool existe = _myVehicles.any((v) => v.id == _selectedVehicle!.id);
           if (!existe) _selectedVehicle = _myVehicles.first;
         }
@@ -1499,16 +1475,12 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // Dentro de tu HomeProvider.dart
   Future<void> initActiveTrip() async {
     try {
-      // CAMBIO: En lugar de _apiService, usa el repositorio existente
-      // Asumiendo que tu TripRepository tiene un método para buscar el viaje activo
       final tripData = await _tripRepository.getActiveTrip();
 
       if (tripData != null) {
-        _activeTrip =
-            tripData; // Como el repositorio ya devuelve un objeto Trip, no necesitas .fromMap
+        _activeTrip = tripData;
         notifyListeners();
       } else {
         _activeTrip = null;
@@ -1516,7 +1488,6 @@ class HomeProvider extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint("Error refrescando viaje activo: $e");
-      // Si falla (por 404 o red), limpiamos
       _activeTrip = null;
       notifyListeners();
     }
@@ -1556,14 +1527,10 @@ class HomeProvider extends ChangeNotifier {
         "💰 [REAL-TIME] Señal de billetera recibida. Saldo: $nuevoSaldo",
       );
 
-      // Esto actualizará el Side Menu y la Wallet Screen al instante
       sl<WalletProvider>().loadWalletData(force: true);
     });
   }
 
-  // En tu HomeProvider.dart, localiza _startListeningTrips y añade el punto "."
-  // 🟢 BLINDAJE EXTREMO: Si el Socket envía una señal parcial, consulta de inmediato a la API de respaldo
-  // 🟢 COMPLETAMENTE BLINDADO: Si el Socket envía datos parciales, hidrata de inmediato consultando a la API
   void _startListeningTrips() {
     _tripSubscription?.cancel();
 
@@ -1587,8 +1554,6 @@ class HomeProvider extends ChangeNotifier {
         }
 
         if (trip.status == TripStatus.ACCEPTED) {
-          // 🟢 BLINDAJE: Si el viaje que llega por Socket es parcial (dirección o pasajeros vacíos)
-          // consultamos inmediatamente al servidor para obtener el objeto completo y detallado.
           if (trip.originAddress == 'Origen...' || trip.passengers.isEmpty) {
             final fullTrip = await _tripRepository.getActiveTrip();
             if (fullTrip != null) {
@@ -1632,8 +1597,6 @@ class HomeProvider extends ChangeNotifier {
   }
 
   bool get puedeAceptarViajes {
-    // Accedemos al valor actual de la billetera
-    // Nota: Si WalletProvider es accesible, obtenemos su valor
     final wallet = sl<WalletProvider>();
     return wallet.balance > -20000;
   }
@@ -1661,7 +1624,6 @@ class HomeProvider extends ChangeNotifier {
       _incomingTrip = null;
       _isLoading = false;
 
-      // --- INICIALIZACIÓN ÚNICA DE PARTIDA ---
       _passengerLocation = acceptedTrip.originLocation;
 
       _startPassengerGpsListener(_activeTrip!.id);
@@ -1675,39 +1637,31 @@ class HomeProvider extends ChangeNotifier {
       debugPrint("Error al aceptar viaje: $e");
       _isLoading = false;
 
-      // --- SOLUCIÓN: EXTRAER Y MOSTRAR EL ERROR REAL DEL SERVIDOR ---
       String mensajeAMostrar = "No se pudo aceptar el viaje. Intenta de nuevo.";
 
-      // Si tu repositorio usa Dio, puedes extraer el mensaje JSON del backend así:
-      // (Ajusta esto según la librería HTTP que uses, por ejemplo, e.response?.data['message'])
       final errorString = e.toString();
       if (errorString.contains("saldo") ||
           errorString.contains("bajo") ||
           errorString.contains("Recarga")) {
         mensajeAMostrar = "Tu saldo es muy bajo. Recarga para continuar.";
       } else {
-        // Limpiamos prefijos comunes si es una excepción personalizada
         mensajeAMostrar = errorString.replaceAll("Exception:", "").trim();
       }
 
-      // Disparar la alerta visual en el front
       _showError(mensajeAMostrar);
 
       notifyListeners();
     }
   }
 
-  /// Retorna si el viaje activo actual en el conductor es programado.
   bool get isActiveTripScheduled {
     if (_activeTrip == null) return false;
-    // Un viaje es programado si tiene fecha asignada en 'scheduledAt'
     return _activeTrip!.scheduledAt != null;
   }
 
   Future<void> rejectIncomingTrip() async {
     if (_incomingTrip == null) return;
 
-    // Guardamos el ID antes de limpiar
     _lastRejectedTripId = _incomingTrip!.id;
 
     try {
@@ -1720,14 +1674,12 @@ class HomeProvider extends ChangeNotifier {
       debugPrint("Error: $e");
     }
 
-    // Limpiamos el filtro después de unos segundos
     Future.delayed(
       const Duration(seconds: 5),
       () => _lastRejectedTripId = null,
     );
   }
 
-  /// 🟢 NUEVO: Inicia la ruta hacia el origen del pasajero (Cambia de SCHEDULED_ASSIGNED a ACCEPTED)
   Future<void> iniciarRutaAlOrigen() async {
     if (_activeTrip == null) return;
 
@@ -1735,7 +1687,6 @@ class HomeProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Cambiamos el estado a ACCEPTED (Esto avisa al pasajero en tiempo real que vamos en camino)
       await _updateTripStatus('ACCEPTED');
     } catch (e) {
       debugPrint("🚨 Error al iniciar ruta al origen: $e");
@@ -1745,7 +1696,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  /// 🟢 ACTUALIZADO: Intenta activar el viaje programado ingresando el PIN (Pasa de ARRIVED a STARTED)
   Future<bool> activarViajeProgramado(String pin) async {
     if (_activeTrip == null || _currentPosition == null) return false;
 
@@ -1765,16 +1715,13 @@ class HomeProvider extends ChangeNotifier {
       );
 
       if (response.statusCode == 200 && response.data['status'] == 'success') {
-        // Obtenemos el viaje actualizado desde el servidor (ahora en estado STARTED)
         final tripReal = await _tripRepository.getActiveTrip();
 
         if (tripReal != null) {
           _activeTrip = tripReal;
 
-          // Guardamos en memoria local
           await _storageService.saveCurrentTrip(_activeTrip!);
 
-          // 🟢 LIMPIEZA: Como el pasajero ya abordó, detenemos el rastreo de su celular en tiempo real
           _passengerLocation = null;
           _stopPassengerGpsListener();
 
@@ -1843,10 +1790,8 @@ class HomeProvider extends ChangeNotifier {
               final double lat = double.parse(data['lat'].toString());
               final double lng = double.parse(data['lng'].toString());
 
-              // ACTIVAR ENTRADA DE DATOS REALES
               _hasReceivedPassengerGps = true;
 
-              // Actualiza la posición y notifica a HomeScreen del conductor
               passengerLocation = LatLng(lat, lng);
             } catch (ex) {
               debugPrint(
@@ -1866,23 +1811,19 @@ class HomeProvider extends ChangeNotifier {
     _passengerGpsSubscription = null;
     _passengerPusherClient?.disconnect();
     _passengerLocation = null;
-    _hasReceivedPassengerGps = false; // <- AGREGAR ESTA LÍNEA AQUÍ
+    _hasReceivedPassengerGps = false;
   }
 
-  /// --- NUEVO: Lógica unificada de cancelación (Conductor) ---
   Future<void> cancelTripAsDriver(String tripId) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      // Usamos updateTripStatus que ya tienes configurado para 'CANCELLED'
       await _tripRepository.updateTripStatus(tripId, 'CANCELLED');
 
-      // Limpieza post-cancelación
-      _finishTrip(); // Este método ya lo tienes y limpia variables y notifica
+      _finishTrip();
     } catch (e) {
       debugPrint("Error al cancelar: $e");
-      // Si falla en servidor, limpiamos localmente por seguridad
       _finishTrip();
     } finally {
       _isLoading = false;
@@ -1894,12 +1835,9 @@ class HomeProvider extends ChangeNotifier {
   // E. MÁQUINA DE ESTADOS Y COBRO (LÓGICA CRÍTICA)
   // =======================================================
 
-  /// Método principal llamado por el botón grande del panel
-  /// Método principal llamado por el botón grande del panel
   Future<void> handleTripAction(BuildContext context) async {
     if (_activeTrip == null) return;
 
-    // --- BLINDAJE DE DISTANCIA AL MARCAR LLEGADA al sitio (Estado ACCEPTED -> ARRIVED) ---
     if (_activeTrip!.status == TripStatus.ACCEPTED) {
       if (_currentPosition == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1913,7 +1851,6 @@ class HomeProvider extends ChangeNotifier {
         return;
       }
 
-      // Calculamos la distancia en metros entre el conductor y el origen del viaje
       const Distance distance = Distance();
       final double distanceInMeters = distance.as(
         LengthUnit.Meter,
@@ -1921,7 +1858,6 @@ class HomeProvider extends ChangeNotifier {
         _activeTrip!.originLocation,
       );
 
-      // Si está a más de 100 metros, mostramos alerta y bloqueamos el avance de estado
       if (distanceInMeters > 100.0) {
         showDialog(
           context: context,
@@ -1964,8 +1900,7 @@ class HomeProvider extends ChangeNotifier {
                     height: 50,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            AppColors.primaryGreen, // Verde esmeralda premium
+                        backgroundColor: AppColors.primaryGreen,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -1985,30 +1920,22 @@ class HomeProvider extends ChangeNotifier {
             ),
           ),
         );
-        return; // Bloquea la ejecución y no avanza el estado
+        return;
       }
     }
 
-    // 1. SI ESTAMOS EN RUTA -> LLEGAMOS AL DESTINO -> INICIAR FLUJO DE COBRO
     if (_activeTrip!.status == TripStatus.STARTED) {
       await _initiatePaymentFlow(context);
-    }
-    // 2. OTROS ESTADOS (Aceptado -> Llegada -> Inicio)
-    else {
+    } else {
       await _advanceStatusOnly();
     }
   }
 
-  /// Flujo de Fin de Viaje:
-  /// 1. Notifica llegada al backend.
-  /// 2. Obtiene precio calculado.
-  /// 3. Muestra Modal de Pago Bloqueante.
   Future<void> _initiatePaymentFlow(BuildContext context) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      // A. Notificar al backend "Llegué al destino" (DROPPED_OFF).
       final updatedTrip = await _tripRepository.updateTripStatus(
         _activeTrip!.id,
         "DROPPED_OFF",
@@ -2022,21 +1949,18 @@ class HomeProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
 
-      // B. Mostrar Sheet de Espera de Pago (Bloqueante)
       if (context.mounted) {
         showModalBottomSheet(
           context: context,
-          isDismissible: false, // Obligatorio esperar
+          isDismissible: false,
           enableDrag: false,
           isScrollControlled: true,
           backgroundColor: Colors.transparent,
           builder: (ctx) => PaymentWaitingSheet(
             tripId: _activeTrip!.id,
             amount: _activeTrip!.price,
-            paymentMethod: _activeTrip!
-                .paymentMethod, // <--- CAMBIO: Pasamos el método de pago
+            paymentMethod: _activeTrip!.paymentMethod,
             onPaymentConfirmed: (Trip freshTrip) {
-              // C. Callback: El pago fue confirmado (Vía Socket o Vía Efectivo)
               _finalizeTripWithWallet(context, freshTrip);
             },
           ),
@@ -2057,23 +1981,18 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  /// Cierre definitivo tras confirmación de pago
-  // Añadimos el parámetro Trip? updatedTrip
-  /// Cierre definitivo tras confirmación de pago
   Future<void> _finalizeTripWithWallet(
     BuildContext context,
     Trip? updatedTrip,
   ) async {
     if (_activeTrip == null && updatedTrip == null) return;
 
-    // Si recibimos el viaje actualizado del modal, lo usamos
     if (updatedTrip != null) {
       _activeTrip = updatedTrip;
     }
 
     try {
       if (context.mounted) {
-        // 1. Mantenemos tus llamadas a los otros Providers (Esto quita las advertencias)
         Provider.of<WalletProvider>(
           context,
           listen: false,
@@ -2089,7 +2008,6 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  // Avance simple de estados (Aceptado -> Llegado -> Iniciado)
   Future<void> _advanceStatusOnly() async {
     TripStatus nextStatus;
     switch (_activeTrip!.status) {
@@ -2118,7 +2036,6 @@ class HomeProvider extends ChangeNotifier {
       _updateActiveTripWithPreservation(updatedTrip);
       await _storageService.saveCurrentTrip(_activeTrip!);
 
-      // Limpiamos referencias de polilínea para forzar cálculo fresco en el nuevo estado
       _routePoints = [];
 
       await _calculateRouteForCurrentStatus();
@@ -2134,11 +2051,11 @@ class HomeProvider extends ChangeNotifier {
     debugPrint("DEBUG: _finishTrip ejecutado.");
 
     _stopPassengerGpsListener();
-    _stopRouteRecalculationTimer(); // 🟢 Corrección aquí (añadir "ion")
+    _stopRouteRecalculationTimer();
 
     _activeTrip = null;
     _routePoints = [];
-    _extraWaitingTimeAdded = false; // Reset al finalizar
+    _extraWaitingTimeAdded = false;
 
     _storageService.clearCurrentTrip();
     _startListeningTrips();
@@ -2156,7 +2073,6 @@ class HomeProvider extends ChangeNotifier {
     try {
       await _tripRepository.updateTripStatus(_activeTrip!.id, "CANCELLED");
 
-      // Si tiene éxito, limpiamos normal
       _finishTrip();
 
       if (context.mounted) {
@@ -2167,7 +2083,6 @@ class HomeProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint("Error cancelando: $e");
 
-      // 🔥 FORZAR LIMPIEZA: Aunque el servidor falle, liberamos al conductor
       _finishTrip();
 
       if (context.mounted) {
@@ -2214,9 +2129,9 @@ class HomeProvider extends ChangeNotifier {
     LatLng? destination;
     if (_activeTrip!.status == TripStatus.ACCEPTED ||
         _activeTrip!.status == TripStatus.ARRIVED) {
-      destination = _activeTrip!.originLocation; // Punto de recogida
+      destination = _activeTrip!.originLocation;
     } else if (_activeTrip!.status == TripStatus.STARTED) {
-      destination = _activeTrip!.destinationLocation; // Destino final
+      destination = _activeTrip!.destinationLocation;
     }
 
     if (destination == null) return;
@@ -2233,7 +2148,6 @@ class HomeProvider extends ChangeNotifier {
         (_totalRouteDistanceMeters < straightToTarget ||
             _totalRouteDistanceMeters <= 500.0);
 
-    // 1. Trazado inicial: Si no hay ruta en memoria o detectamos datos obsoletos (stale)
     if (_routePoints.isEmpty || isStale) {
       try {
         final routeResult = await _routeService
@@ -2250,7 +2164,6 @@ class HomeProvider extends ChangeNotifier {
       return;
     }
 
-    // 2. Medir desvío
     int closestIndex = 0;
     double minDistanceToRoute = double.infinity;
 
@@ -2283,20 +2196,17 @@ class HomeProvider extends ChangeNotifier {
       return;
     }
 
-    // 3. Borrado local del trayecto recorrido
     if (closestIndex < _routePoints.length) {
       _routePoints = _routePoints.sublist(closestIndex);
       notifyListeners();
     }
   }
 
-  /// Extrae el mensaje de error de red enviado por el backend (Laravel) de forma dinámica
   String _extractExceptionMessage(dynamic e) {
     try {
       if (e != null) {
         final dynamic error = e;
 
-        // Comprobamos de manera dinámica si el error contiene una respuesta del servidor
         if (error.response != null) {
           final responseData = error.response.data;
           if (responseData != null) {
@@ -2311,16 +2221,12 @@ class HomeProvider extends ChangeNotifier {
           }
         }
 
-        // Si el objeto de error contiene un mensaje de red directo
         if (error.message != null) {
           return error.message.toString();
         }
       }
-    } catch (_) {
-      // Si ocurre un error de lectura o no tiene propiedades de red, continúa al fallback
-    }
+    } catch (_) {}
 
-    // Retorno por defecto para cualquier otra excepción estándar de Dart
     return e.toString().replaceAll("Exception: ", "");
   }
 
@@ -2331,9 +2237,8 @@ class HomeProvider extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _stopPassengerGpsListener();
     _stopRouteRecalculationTimer();
-    _waitTimer?.cancel(); // 🟢 Cancelar timer al destruir el provider
-    _breakTimer?.cancel(); // <--- AGREGAR ESTA LÍNEA AQUÍ
-    _stopNetworkMonitor();
+    _waitTimer?.cancel();
+    _breakTimer?.cancel();
     super.dispose();
   }
 }

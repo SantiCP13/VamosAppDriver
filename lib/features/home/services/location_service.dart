@@ -2,29 +2,26 @@
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart';
-import '../../../core/di/injection_container.dart'; // Inyector de dependencias (sl)
-import '../../../core/services/storage_service.dart'; // Import del servicio de persistencia
+import '../../../core/di/injection_container.dart';
+import '../../../core/services/storage_service.dart';
+
+// 1. Definimos los perfiles de rastreo que usará la app de forma interna
+enum TrackingProfile {
+  offline, // Consumo mínimo, precisión por red (sin GPS satelital activo)
+  onlineIdle, // Conectado esperando viaje, precisión moderada
+  activeTrip, // Viaje en curso, precisión máxima y Foreground Service activo
+}
 
 class LocationService {
-  /// Solicita permisos y verifica si el GPS está encendido
+  // (Mantenemos checkPermissions y getCurrentLocation idénticos a como los tienes)
   Future<bool> checkPermissions() async {
-    bool serviceEnabled;
-    LocationPermission permission;
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return false;
 
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      debugPrint(
-        "📡 [LocationService] El hardware de ubicación (GPS) está desactivado.",
-      );
-      return false;
-    }
-
-    permission = await Geolocator.checkPermission();
+    LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return false;
-      }
+      if (permission == LocationPermission.denied) return false;
     }
 
     if (permission == LocationPermission.deniedForever) {
@@ -35,12 +32,7 @@ class LocationService {
     if (permission == LocationPermission.whileInUse) {
       final alwaysStatus = await Permission.locationAlways.status;
       if (alwaysStatus.isDenied) {
-        final result = await Permission.locationAlways.request();
-        if (!result.isGranted) {
-          debugPrint(
-            "⚠️ [LocationService] Permiso de segundo plano (locationAlways) denegado.",
-          );
-        }
+        await Permission.locationAlways.request();
       }
     }
 
@@ -52,67 +44,33 @@ class LocationService {
     return true;
   }
 
-  /// Obtiene la posición actual con un sistema de cascada resiliente de 3 niveles
   Future<Position?> getCurrentLocation() async {
     try {
       debugPrint(
-        "🛰️ [GPS CASCADE - NIVEL 1] Intentando obtener ubicación GPS satelital activa...",
+        "🛰️ [GPS CASCADE - NIVEL 1] Buscando posición satelital fresca...",
       );
-      // Intentar obtener la posición actual con un timeout estricto de 4 segundos para evitar ANR
       Position current = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 4),
       );
-
-      debugPrint(
-        "✅ [GPS CASCADE - NIVEL 1 ÉXITO] Posición fresca del sensor: (${current.latitude}, ${current.longitude})",
-      );
       return current;
     } catch (e) {
       debugPrint(
-        "⚠️ [GPS CASCADE - NIVEL 1 FALLO] No se pudo obtener GPS en tiempo real (Timeout o falta de señal/red).",
+        "⚠️ [GPS CASCADE - NIVEL 1 FALLO] Fallo GPS activo. Pasando a caché...",
       );
-
-      // NIVEL 2: Intentar obtener la caché de ubicación del sistema operativo
       try {
-        debugPrint(
-          "🛰️ [GPS CASCADE - NIVEL 2] Buscando última ubicación registrada en la caché del OS...",
-        );
         Position? lastKnown = await Geolocator.getLastKnownPosition();
-        if (lastKnown != null) {
-          debugPrint(
-            "✅ [GPS CASCADE - NIVEL 2 ÉXITO] Recuperada del OS: (${lastKnown.latitude}, ${lastKnown.longitude})",
-          );
-          return lastKnown;
-        }
-        debugPrint(
-          "⚠️ [GPS CASCADE - NIVEL 2 FALLO] La caché del sistema operativo retornó nulo.",
-        );
+        if (lastKnown != null) return lastKnown;
       } catch (ex) {
-        debugPrint(
-          "🚨 [GPS CASCADE - NIVEL 2 ERROR] Fallo al consultar caché del OS: $ex",
-        );
+        debugPrint("🚨 [GPS CASCADE - NIVEL 2 ERROR] $ex");
       }
-
-      // NIVEL 3: Leer la ubicación persistida en la base de datos local de la App (StorageService)
       try {
-        debugPrint(
-          "💾 [GPS CASCADE - NIVEL 3] Intentando recuperar la última ubicación registrada por VAMOS...",
-        );
         final storage = sl<StorageService>();
         final savedPos = await storage.getLastPosition();
-
         if (savedPos != null) {
-          final double lat = savedPos['lat']!;
-          final double lng = savedPos['lng']!;
-          debugPrint(
-            "✅ [GPS CASCADE - NIVEL 3 ÉXITO] Ubicación recuperada del disco persistente de la aplicación: ($lat, $lng)",
-          );
-
-          // Retornamos un objeto Position simulado para mantener compatibilidad con toda la app sin romper firmas
           return Position(
-            latitude: lat,
-            longitude: lng,
+            latitude: savedPos['lat']!,
+            longitude: savedPos['lng']!,
             timestamp: DateTime.now(),
             accuracy: 15.0,
             altitude: 0.0,
@@ -123,46 +81,71 @@ class LocationService {
             speedAccuracy: 0.0,
           );
         }
-        debugPrint(
-          "❌ [GPS CASCADE - NIVEL 3 FALLO] No se encontraron registros de ubicación previos guardados por esta app.",
-        );
       } catch (ex) {
-        debugPrint(
-          "🚨 [GPS CASCADE - NIVEL 3 ERROR] Error de lectura en disco persistente local: $ex",
-        );
+        debugPrint("🚨 [GPS CASCADE - NIVEL 3 ERROR] $ex");
       }
     }
     return null;
   }
 
-  Stream<Position> getPositionStream() {
+  // 2. NUEVO: getPositionStream dinámico que acepta un perfil específico
+  Stream<Position> getPositionStream({required TrackingProfile profile}) {
     late final LocationSettings locationSettings;
+
+    // Mapeo dinámico de precisión y frecuencia según el estado actual
+    LocationAccuracy accuracy;
+    int distanceFilter;
+    int intervalSeconds;
+    bool useWakeLock;
+
+    switch (profile) {
+      case TrackingProfile.offline:
+        accuracy = LocationAccuracy.low; // Evita usar hardware satelital puro
+        distanceFilter = 25; // Ignora pequeñas fluctuaciones
+        intervalSeconds = 45; // Actualiza cada 45 segundos
+        useWakeLock = false;
+        break;
+      case TrackingProfile.onlineIdle:
+        accuracy = LocationAccuracy.medium; // Precisión balanceada por red/GPS
+        distanceFilter = 10;
+        intervalSeconds = 12; // Actualiza cada 12 segundos
+        useWakeLock = false;
+        break;
+      case TrackingProfile.activeTrip:
+        accuracy = LocationAccuracy.high; // Precisión máxima para navegación
+        distanceFilter = 2; // Sensibilidad fina
+        intervalSeconds = 2; // Actualiza constantemente cada 2 segundos
+        useWakeLock = true; // Previene suspensiones de CPU
+        break;
+    }
 
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter:
-            0, // 🔴 MODIFICADO: 0 metros para capturar cualquier micro-movimiento constantemente
+        accuracy: accuracy,
+        distanceFilter: distanceFilter,
         forceLocationManager: false,
-        intervalDuration: const Duration(
-          seconds: 2,
-        ), // 🔴 MODIFICADO: Solicitar ubicación constantemente cada 2 segundos
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText:
-              "VAMOS está transmitiendo tu ubicación para recibir viajes.",
-          notificationTitle: "Servicio de Conducción Activo",
-          enableWakeLock: true,
-        ),
+        intervalDuration: Duration(seconds: intervalSeconds),
+        foregroundNotificationConfig: useWakeLock
+            ? const ForegroundNotificationConfig(
+                notificationText:
+                    "VAMOS está transmitiendo tu ubicación para guiar el viaje activo.",
+                notificationTitle: "Servicio de Conducción Activo",
+                enableWakeLock: true,
+              )
+            : null,
       );
     } else {
       locationSettings = AppleSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 0, // 🔴 MODIFICADO: 0 metros para iOS
+        accuracy: accuracy,
+        distanceFilter: distanceFilter,
         pauseLocationUpdatesAutomatically: false,
-        showBackgroundLocationIndicator: true,
+        showBackgroundLocationIndicator: useWakeLock,
       );
     }
 
+    debugPrint(
+      "⚙️ [GPS CONFIG] Stream reiniciado. Perfil: ${profile.name} (Acc: ${accuracy.name}, Int: ${intervalSeconds}s, Filt: ${distanceFilter}m)",
+    );
     return Geolocator.getPositionStream(locationSettings: locationSettings);
   }
 }

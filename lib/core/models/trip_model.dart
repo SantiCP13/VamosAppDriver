@@ -80,11 +80,14 @@ class Trip {
   // 🏷️ NUEVOS CAMPOS DE DESCUENTO (CONDUCTOR)
   final String? promotionId;
   final double discount;
+  final String? vehicleId; // 🟢 NUEVO CAMPO
 
   Trip({
     required this.id,
     this.assignmentId,
     this.contractId,
+    this.vehicleId, // 🟢 NUEVA LÍNEA
+
     this.companyId,
     required this.passengers,
     required this.price,
@@ -140,6 +143,8 @@ class Trip {
     String? id,
     String? contractId,
     String? companyId,
+    String? vehicleId, // 🟢 NUEVA LÍNEA
+
     List<Passenger>? passengers,
     double? price,
     double? driverRevenue,
@@ -165,6 +170,8 @@ class Trip {
       date: date ?? this.date,
       contractId: contractId ?? this.contractId,
       companyId: companyId ?? this.companyId,
+      vehicleId: vehicleId ?? this.vehicleId, // 🟢 NUEVA LÍNEA
+
       passengers: passengers ?? this.passengers,
       price: price ?? this.price,
       driverRevenue: driverRevenue ?? this.driverRevenue,
@@ -324,6 +331,8 @@ class Trip {
       discount: checkDouble(
         map['monto_descuento'] ?? v['monto_descuento'] ?? 0.0,
       ),
+      vehicleId: (map['id_vehiculo'] ?? v['id_vehiculo'])
+          ?.toString(), // 🟢 AGREGA ESTA LÍNEA
     );
   }
 

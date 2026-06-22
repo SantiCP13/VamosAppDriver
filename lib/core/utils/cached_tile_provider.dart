@@ -18,9 +18,11 @@ class CachedTileProvider extends TileProvider {
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
     final url = getTileUrl(coordinates, options);
 
-    // Clave única basada en la ruta de la tesela
-    final uri = Uri.parse(url);
-    final String cleanKey = "${uri.host}${uri.path}";
+    // 🟢 CLAVE UNIFICADA ROBUSTA:
+    // Al basar la clave únicamente en las coordenadas físicas del mapa,
+    // garantizamos que la app use el archivo local sin importar qué subdominio (a, b, c, d) lo solicite.
+    final String cleanKey =
+        "dark_all_${coordinates.z}_${coordinates.x}_${coordinates.y}";
 
     return CachedNetworkImageProvider(
       url,
