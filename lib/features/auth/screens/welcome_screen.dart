@@ -2,11 +2,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart'; // 🟢 Importación para abrir links externos
+import 'package:url_launcher/url_launcher.dart';
+import 'package:package_info_plus/package_info_plus.dart'; // 🟢 NUEVA IMPORTACIÓN
 import '../../../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
-import 'splash_screen.dart'; // Importante
+import 'splash_screen.dart';
 import 'dart:ui';
 
 class WelcomeScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class WelcomeScreen extends StatefulWidget {
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isLoading = true;
+  String _appVersion = "v0.0.0"; // 🟢 VARIABLE DINÁMICA DE VERSIÓN
 
   @override
   void initState() {
@@ -28,7 +30,21 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   Future<void> _checkStatus() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     await authProvider.checkAuthStatus();
+    await _loadAppVersion(); // 🟢 OBTENER VERSIÓN DEL SISTEMA
     if (mounted) setState(() => _isLoading = false);
+  }
+
+  // 🟢 MÉTODO PARA LEER EL PUBSPEC DINÁMICAMENTE
+  Future<void> _loadAppVersion() async {
+    try {
+      final PackageInfo packageInfo = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _appVersion =
+              "Versión ${packageInfo.version} (${packageInfo.buildNumber})";
+        });
+      }
+    } catch (_) {}
   }
 
   void _navigateTo(Widget screen) {
@@ -47,9 +63,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     );
   }
 
-  // 🟢 NUEVO: Método para lanzar WhatsApp hacia soporte de conductores
   Future<void> _launchSupportWhatsApp() async {
-    // Reemplaza el número '573000000000' por tu número real de soporte corporativo para conductores
     final Uri whatsappUri = Uri.parse(
       "https://wa.me/573112321539?text=Hola%20VAMOS,%20necesito%20soporte%20con%20la%20aplicaci%C3%B3n%20de%20Conductores.",
     );
@@ -145,9 +159,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.montserrat(
                                   fontSize: 15,
-                                  color: Colors.white.withValues(
-                                    alpha: 0.6,
-                                  ), // Reemplazado withOpacity obsoleto
+                                  color: Colors.white.withValues(alpha: 0.6),
                                   height: 1.6,
                                   fontWeight: FontWeight.w500,
                                 ),
@@ -191,11 +203,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
                             const Spacer(flex: 1),
 
-                            // 🟢 NUEVO: BOTÓN DE SOPORTE POR WHATSAPP EN ESTILO DRIVER DARK
                             _buildFadeIn(
                               delay: 800,
                               child: Padding(
-                                padding: const EdgeInsets.only(bottom: 20),
+                                padding: const EdgeInsets.only(bottom: 10),
                                 child: TextButton.icon(
                                   onPressed: _launchSupportWhatsApp,
                                   icon: const Icon(
@@ -214,6 +225,17 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                                     ),
                                   ),
                                 ),
+                              ),
+                            ),
+
+                            // 🟢 NUEVO: TEXTO DINÁMICO DE VERSIÓN AL PIE DE PÁGINA
+                            Text(
+                              _appVersion,
+                              style: GoogleFonts.montserrat(
+                                color: Colors.white30,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
                               ),
                             ),
 

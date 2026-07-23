@@ -123,7 +123,7 @@ class User {
       idResponsable: map['manager_id']?.toString() ?? map['id_responsable'],
       email: map['email'] ?? '',
       name: map['name'] ?? map['nombre'] ?? '',
-      photoUrl: map['photo_url'],
+      photoUrl: map['foto_perfil'],
       phone: map['phone'] ?? map['telefono'] ?? '',
       documentNumber: map['document_number'] ?? map['documento'] ?? '',
       address: map['address'] ?? map['direccion'] ?? '',

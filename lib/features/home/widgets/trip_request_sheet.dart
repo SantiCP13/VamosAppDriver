@@ -1,11 +1,13 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import '../../../core/models/trip_model.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
-import 'package:provider/provider.dart'; // <--- ESTE TE FALTA
+import 'package:provider/provider.dart';
 import '../providers/home_provider.dart';
 
-class TripRequestSheet extends StatelessWidget {
+class TripRequestSheet extends StatefulWidget {
   final Trip trip;
   final VoidCallback onAccept;
   final VoidCallback onReject;
@@ -18,12 +20,22 @@ class TripRequestSheet extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<HomeProvider>().calculateIncomingTripRoute();
-    });
+  State<TripRequestSheet> createState() => _TripRequestSheetState();
+}
 
-    if (trip.id == '0' || trip.status == TripStatus.CANCELLED) {
+class _TripRequestSheetState extends State<TripRequestSheet> {
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 🟢 OPTIMIZACIÓN: Solo conservamos la variable en uso para evitar warnings
+    final double totalPeajes =
+        (widget.trip.desglosePrecio?['total_peajes'] ?? 0.0).toDouble();
+
+    if (widget.trip.id == '0' || widget.trip.status == TripStatus.CANCELLED) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => Navigator.pop(context),
       );
@@ -47,7 +59,7 @@ class TripRequestSheet extends StatelessWidget {
             height: 4,
             margin: const EdgeInsets.only(bottom: 20),
             decoration: BoxDecoration(
-              color: Colors.white10,
+              color: Colors.white12,
               borderRadius: BorderRadius.circular(10),
             ),
           ),
@@ -70,7 +82,7 @@ class TripRequestSheet extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    trip.passengerName,
+                    widget.trip.passengerName, // 👈 Cambiado a 'widget.trip'
                     style: GoogleFonts.poppins(
                       fontSize: 22,
                       fontWeight: FontWeight.w600,
@@ -117,18 +129,17 @@ class TripRequestSheet extends StatelessWidget {
             ],
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 15),
 
-          // Precios
-          // Detalles del Viaje - REEMPLAZA ESTE BLOQUE EXACTO
-          // Precios
-          // Detalles del Viaje
+          // Tarjeta de Detalles del Viaje
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
+              // ignore: duplicate_ignore
               // ignore: deprecated_member_use
               color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
             ),
             child: Column(
               children: [
@@ -137,61 +148,162 @@ class TripRequestSheet extends StatelessWidget {
                   children: [
                     _priceColumn(
                       "Ganancia Neta",
-                      _formatCurrency(trip.driverRevenue),
+                      _formatCurrency(
+                        widget
+                            .trip
+                            .driverRevenue, // Mostrará la ganancia neta recalculada sobre el neto cobrado
+                      ),
                     ),
                     Container(width: 1, height: 30, color: Colors.white10),
-                    _priceColumn("Total Viaje", _formatCurrency(trip.price)),
+                    _priceColumn(
+                      "Total Viaje",
+                      _formatCurrency(
+                        widget
+                            .trip
+                            .passengerCashToPay, // 🟢 SOLUCIÓN: Muestra la tarifa real con descuento cobrada en efectivo
+                      ),
+                    ),
                   ],
                 ),
 
-                // 🟢 INSIGNIA TRANSPARENTE DE SUBSIDIO VAMOS APP
-                if (trip.hasDiscount) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      // ignore: deprecated_member_use
-                      color: AppColors.primaryGreen.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Divider(color: Colors.white10),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
                         const Icon(
-                          Icons.stars_rounded,
-                          size: 14,
-                          color: AppColors.primaryGreen,
+                          Icons.toll_rounded,
+                          color: Colors.orangeAccent,
+                          size: 16,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 8),
                         Text(
-                          "CON SUBSIDIO: PASAJERO PAGARÁ \$ ${_formatCurrency(trip.passengerCashToPay)}",
+                          "ANÁLISIS DE PEAJES EN RUTA",
                           style: GoogleFonts.montserrat(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primaryGreen,
-                            letterSpacing: 0.5,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.orangeAccent,
+                            letterSpacing: 1.1,
                           ),
                         ),
                       ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
 
+                    // 1. Peajes de aproximación
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.arrow_circle_right_outlined,
+                          color: Colors.redAccent,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Hacia el origen (Aproximación):",
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                provider.incomingTollsTotal > 0
+                                    ? "Se cargará al pasajero y se te reembolsará al 100%"
+                                    : "Sin peajes en el trayecto de recogida",
+                                style: GoogleFonts.poppins(
+                                  fontSize: 10,
+                                  color: Colors.grey[400],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          provider.incomingTollsTotal > 0
+                              ? _formatCurrency(provider.incomingTollsTotal)
+                              : "NO APLICA",
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: provider.incomingTollsTotal > 0
+                                ? Colors.redAccent
+                                : Colors.white30,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 2. Peajes del viaje
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.check_circle_outline_rounded,
+                          color: AppColors.primaryGreen,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Durante el viaje (Hacia el destino):",
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                totalPeajes > 0
+                                    ? "✅ Reembolsado 100% en tu ganancia neta"
+                                    : "Sin peajes en la ruta de viaje",
+                                style: GoogleFonts.poppins(
+                                  fontSize: 10,
+                                  color: Colors.grey[400],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          totalPeajes > 0
+                              ? _formatCurrency(totalPeajes)
+                              : "NO APLICA",
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: totalPeajes > 0
+                                ? AppColors.primaryGreen
+                                : Colors.white30,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 15),
                   child: Divider(color: Colors.white10),
                 ),
                 _infoRow(
                   "Distancia Total:",
-                  "${trip.distanceKm.toStringAsFixed(1)} km",
+                  "${widget.trip.distanceKm.toStringAsFixed(1)} km", // 👈 Cambiado a 'widget.trip'
                   Icons.straighten,
                 ),
                 _infoRow(
                   "Tiempo Estimado:",
-                  "${trip.duration.toStringAsFixed(0)} min",
+                  "${widget.trip.duration.toStringAsFixed(0)} min", // 👈 Cambiado a 'widget.trip'
                   Icons.timer_outlined,
                 ),
               ],
@@ -204,7 +316,7 @@ class TripRequestSheet extends StatelessWidget {
 
           const SizedBox(height: 30),
 
-          // Botones
+          // Botones de respuesta
           Consumer<HomeProvider>(
             builder: (context, provider, _) {
               return Row(
@@ -212,10 +324,9 @@ class TripRequestSheet extends StatelessWidget {
                   Expanded(
                     child: _actionButton(
                       "RECHAZAR",
-                      // ignore: deprecated_member_use
                       const Color.fromARGB(255, 153, 11, 11),
                       const Color.fromARGB(255, 255, 255, 255),
-                      onReject,
+                      widget.onReject, // 👈 Cambiado a 'widget.onReject'
                     ),
                   ),
                   const SizedBox(width: 15),
@@ -225,7 +336,7 @@ class TripRequestSheet extends StatelessWidget {
                       "ACEPTAR VIAJE",
                       AppColors.primaryGreen,
                       const Color.fromARGB(255, 255, 255, 255),
-                      onAccept,
+                      widget.onAccept, // 👈 Cambiado a 'widget.onAccept'
                       isLoading: provider.isLoading,
                     ),
                   ),
@@ -264,7 +375,7 @@ class TripRequestSheet extends StatelessWidget {
       ],
     ),
   );
-  // Helpers Premium
+
   Widget _priceColumn(String title, String value) => Column(
     children: [
       Text(
@@ -286,6 +397,7 @@ class TripRequestSheet extends StatelessWidget {
       ),
     ],
   );
+
   Widget _actionButton(
     String text,
     Color bg,
@@ -318,11 +430,11 @@ class TripRequestSheet extends StatelessWidget {
             ),
           ),
   );
+
   Widget _buildRouteTimeline() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        // ignore: deprecated_member_use
         color: Colors.white.withOpacity(0.05),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -331,7 +443,7 @@ class TripRequestSheet extends StatelessWidget {
           _addressRow(
             Icons.radio_button_checked,
             "Recogida",
-            trip.originAddress,
+            widget.trip.originAddress, // 👈 Cambiado a 'widget.trip'
             Colors.green,
           ),
           const Padding(
@@ -344,7 +456,7 @@ class TripRequestSheet extends StatelessWidget {
           _addressRow(
             Icons.location_on,
             "Destino",
-            trip.destinationAddress,
+            widget.trip.destinationAddress, // 👈 Cambiado a 'widget.trip'
             Colors.redAccent,
           ),
         ],
@@ -355,7 +467,7 @@ class TripRequestSheet extends StatelessWidget {
   Widget _addressRow(IconData icon, String label, String address, Color color) {
     return Row(
       children: [
-        Icon(icon, size: 16, color: Colors.white30), // Icono más discreto
+        Icon(icon, size: 16, color: Colors.white30),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
@@ -369,7 +481,6 @@ class TripRequestSheet extends StatelessWidget {
     );
   }
 
-  // Pégalo justo antes del último } de la clase TripRequestSheet
   String _formatCurrency(double amount) {
     return "\$${amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}";
   }

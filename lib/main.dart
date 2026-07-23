@@ -15,6 +15,7 @@ import 'core/di/injection_container.dart' as di;
 import 'features/auth/screens/splash_screen.dart';
 import 'package:flutter/services.dart';
 import 'core/services/notification_service.dart'; // <--- AGREGAR ESTE IMPORT
+import 'core/services/storage_service.dart'; // <--- AGREGAR ESTE IMPORT
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -35,6 +36,9 @@ void main() async {
   await di.init();
   await initializeDateFormatting('es_ES', null);
 
+  // === 🟢 NUEVO: FILTRO ANTIGUAS VERSIONES Y AUTOLIMPIEZA ===
+  final storageService = di.sl<StorageService>();
+  await storageService.checkAndClearCacheOnUpdate();
   // 2. Obtenemos las instancias desde el contenedor (YA REGISTRADAS como Singleton)
   final authProvider = di.sl<AuthProvider>();
   final homeProvider = di.sl<HomeProvider>(); // Instancia única

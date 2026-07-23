@@ -143,7 +143,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     String? errorDetail;
     setState(() => _fieldErrors = {});
 
-    // 1. Validaciones Premium
+    // 1. Validaciones de campos
     if (_nameCtrl.text.trim().length < 3) {
       _fieldErrors['nombre'] = true;
       errorDetail = "Escribe tu nombre completo.";
@@ -187,18 +187,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
-    // 2. ACTIVAR SPLASH DE CARGA
     setState(() => _isLoading = true);
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const SplashScreen(
-          logoPath: 'assets/images/logo.png',
-          isLoader: true,
-          isDark: true,
-        ),
+
+    // 2. Definimos y empujamos la ruta de carga
+    final loadingRoute = MaterialPageRoute(
+      builder: (_) => const SplashScreen(
+        logoPath: 'assets/images/logo.png',
+        isLoader: true,
+        isDark: true,
       ),
     );
+    Navigator.push(context, loadingRoute);
 
     try {
       await _authService.register(
@@ -208,25 +207,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
         password: _passCtrl.text.trim(),
         passwordConfirmation: _confirmPassCtrl.text.trim(),
         documento: _docCtrl.text.trim(),
-        tipoDocumento: _tipoDocumento, // Agregado
+        tipoDocumento: _tipoDocumento,
         fvLicencia: _fvLicenciaCtrl.text.trim(),
         selfieFile: _selfieFile!,
         cedulaFile: _cedulaFile!,
-        licenciaFile: _licenciaFile!, // <--- AGREGA ESTA LÍNEA
+        licenciaFile: _licenciaFile!,
       );
 
-      if (!mounted) return;
-      Navigator.pop(context); // Cerrar Splash
+      // 3. Eliminamos el loader de forma segura
+      if (mounted) {
+        Navigator.of(context).removeRoute(loadingRoute);
+      }
 
       Navigator.pushReplacement(
+        // ignore: use_build_context_synchronously
         context,
-        MaterialPageRoute(
-          builder: (_) =>
-              const PendingApprovalScreen(), // <--- QUITA EL isNatural: true
-        ),
+        MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
       );
     } catch (e) {
-      if (mounted) Navigator.pop(context);
+      // 4. En caso de error, removemos el loader y mostramos el snackbar con el mensaje real
+      if (mounted) {
+        Navigator.of(context).removeRoute(loadingRoute);
+      }
       _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);

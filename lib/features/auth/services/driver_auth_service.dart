@@ -67,6 +67,23 @@ class DriverAuthService {
       if (e.response != null && e.response?.data != null) {
         final data = e.response!.data;
 
+        // 🟢 NUEVO: Cálculo dinámico del tiempo de espera para el conductor
+        // Reemplaza la sección del error 429 dentro de tu catch en login por:
+        if (e.response!.statusCode == 429) {
+          final retryAfterHeader = e.response?.headers.value('retry-after');
+          final int secondsToWait = int.tryParse(retryAfterHeader ?? '') ?? 60;
+
+          String timeMessage = "$secondsToWait segundos";
+          if (secondsToWait >= 60) {
+            final int minutes = (secondsToWait / 60).ceil();
+            timeMessage = "$minutes ${minutes == 1 ? 'minuto' : 'minutos'}";
+          }
+
+          throw Exception(
+            "Muchos intentos fallidos. Tu acceso estará bloqueado por $timeMessage hasta poder intentarlo de nuevo.",
+          );
+        }
+
         if (e.response!.statusCode == 422 ||
             e.response!.statusCode == 403 ||
             e.response!.statusCode == 401) {
@@ -149,6 +166,14 @@ class DriverAuthService {
     } on DioException catch (e) {
       if (e.response != null && e.response?.data != null) {
         final data = e.response!.data;
+
+        // 🟢 NUEVO: Control defensivo de Rate Limiting (Error 429) en español
+        if (e.response!.statusCode == 429) {
+          throw Exception(
+            'Demasiados intentos de acceso. Por favor, inténtalo más tarde.',
+          );
+        }
+
         String msg = data is Map
             ? (data['message'] ?? 'Error de validación')
             : 'Error';
@@ -224,9 +249,18 @@ class DriverAuthService {
     } on DioException catch (e) {
       if (e.response != null) {
         if (e.response!.statusCode == 422) {
-          final errors = e.response!.data['errors'] as Map<String, dynamic>;
-          final errorMessages = errors.values.expand((x) => x).join('\n');
-          throw Exception(errorMessages);
+          final data = e.response!.data;
+
+          if (data is Map &&
+              data.containsKey('errors') &&
+              data['errors'] is Map) {
+            final errors = data['errors'] as Map<String, dynamic>;
+            final errorMessages = errors.values.expand((x) => x).join('\n');
+            throw Exception(errorMessages);
+          } else if (data is Map && data.containsKey('message')) {
+            throw Exception(data['message']);
+          }
+          throw Exception('Datos de validación incorrectos.');
         } else if (e.response!.statusCode == 500) {
           throw Exception('Error Servidor/SQL: ${e.response!.data['message']}');
         }

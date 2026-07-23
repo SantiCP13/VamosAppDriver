@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart'; // Para debugPrint
 import '../models/trip_model.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 class StorageService {
   // Llaves de almacenamiento persistente
@@ -15,8 +16,12 @@ class StorageService {
   static const String _lastDriverLatKey = 'last_known_driver_lat';
   static const String _lastDriverLngKey = 'last_known_driver_lng';
 
-  final _secureStorage = const FlutterSecureStorage();
-
+  // 🟢 SIN la palabra 'const' al inicio
+  final _secureStorage = FlutterSecureStorage(
+    iOptions: IOSOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+  );
   // --- PERSISTENCIA LOCAL DE GPS ---
   Future<void> saveLastPosition(double lat, double lng) async {
     try {
@@ -107,9 +112,10 @@ class StorageService {
     await _secureStorage.delete(key: _tokenKey);
   }
 
+  // 🟢 CORREGIDO: Limpieza masiva de colas de viajes y ubicaciones locales al cerrar sesión
   Future<void> deleteAll() async {
-    // 🟢 CORREGIDO: Solo eliminamos el token de sesión activa.
-    // Esto preserva las contraseñas indexadas y estados biométricos locales.
+    // 🟢 CORREGIDO: Solo eliminamos el token de la sesión activa
+    // para preservar las credenciales indexadas y estados biométricos locales de otras cuentas.
     await _secureStorage.delete(key: _tokenKey);
   }
 
@@ -128,5 +134,36 @@ class StorageService {
   Future<void> clearCurrentTrip() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_currentTripKey);
+  }
+
+  // --- LIMPIEZA CONTRA CONFLICTOS DE ACTUALIZACIÓN ---
+  // --- LIMPIEZA CONTRA CONFLICTOS DE ACTUALIZACIÓN ---
+  Future<void> checkAndClearCacheOnUpdate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // package_info_plus lee la versión nativa del pubspec
+      final packageInfo = await PackageInfo.fromPlatform();
+
+      final int currentVersion = int.tryParse(packageInfo.buildNumber) ?? 0;
+      final int savedVersion = prefs.getInt('app_version_code') ?? 0;
+
+      if (currentVersion > savedVersion) {
+        // 🟢 LIMPIEZA ABSOLUTA: Borra todo el SecureStorage de raíz (tokens, contraseñas biométricas, emails)
+        await _secureStorage.deleteAll();
+
+        // 🟢 LIMPIEZA ABSOLUTA: Limpia por completo SharedPreferences (datos de viaje, estados biométricos)
+        await prefs.clear();
+
+        // Guardamos la versión actual para no volver a limpiar en futuros inicios normales
+        // (Se hace después de prefs.clear() para que no se pierda el registro de control)
+        await prefs.setInt('app_version_code', currentVersion);
+
+        debugPrint(
+          "🧹 CACHÉ Y VIAJE ACTIVO LIMPIADOS POR ACTUALIZACIÓN A LA VERSIÓN $currentVersion",
+        );
+      }
+    } catch (e) {
+      debugPrint("Error verificando versión en StorageService: $e");
+    }
   }
 }

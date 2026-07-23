@@ -15,16 +15,18 @@ import '../widgets/trip_request_sheet.dart';
 import '../widgets/trip_panel_sheet.dart';
 import '../widgets/side_menu.dart';
 import 'dart:math' as math;
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../core/utils/cached_tile_provider.dart';
 import 'dart:io'; // <--- Permite usar el tipo 'File' para la foto tomada
 import 'package:image_picker/image_picker.dart'; // <--- Permite abrir la cámara nativa del teléfono
 // ... Asegúrese de tener estas importaciones al inicio del archivo ...
 import 'dart:async'; // 🟢 Requerido para StreamSubscription
-import 'package:dart_pusher_channels/dart_pusher_channels.dart'; // 🟢 Requerido para Sockets
-import '../../../core/services/storage_service.dart'; // 🟢 NUEVA IMPORTACIÓN
-import '../../../core/di/injection_container.dart'
-    as di; // 🟢 NUEVA IMPORTACIÓN
+import 'package:cached_network_image/cached_network_image.dart'; // 🟢 AGREGAR ESTA IMPORTACIÓN
+import 'package:intl/intl.dart'; // 🟢 Importación agregada para usar DateFormat
+import 'package:flutter/services.dart'; // 🟢 NUEVA IMPORTACIÓN PARA MINIMIZAR LA APP
+import '../services/location_service.dart';
+import '../widgets/payment_waiting_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -39,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen>
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isMapReady = false;
   final TextEditingController _pinController = TextEditingController();
+  bool _isPanelMinimized = false;
 
   final String myMapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
   late HomeProvider _homeProvider;
@@ -61,8 +64,6 @@ class _HomeScreenState extends State<HomeScreen>
     _homeProvider = Provider.of<HomeProvider>(context, listen: false);
   }
 
-  StreamSubscription? _shiftSocketSubscription;
-  PusherChannelsClient? _shiftPusherClient;
   @override
   void initState() {
     super.initState();
@@ -80,11 +81,11 @@ class _HomeScreenState extends State<HomeScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 🟢 Agrega esta llamada aquí antes de iniciar el GPS:
+      _checkAndForcePermissions();
       context.read<HomeProvider>().initLocation();
       context.read<WalletProvider>().loadWalletData();
       context.read<HomeProvider>().addListener(_onTripStateChanged);
-
-      _initShiftSocket();
     });
   }
 
@@ -93,80 +94,131 @@ class _HomeScreenState extends State<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint(
-        "📡 [Lifecycle] Conductor regresó a la app. Sincronizando turno...",
+        "📡 [Lifecycle] Conductor regresó a la app. Re-sincronizando estado completo...",
       );
-      context.read<HomeProvider>().verificarTurnoActivoConServidor();
+      // 🚀 Llama al método del Provider que sincroniza tanto el turno como el viaje en background
+      context.read<HomeProvider>().recargarEstadoCompleto();
     }
   }
 
-  // 🟢 NUEVO MÉTODO: Conexión al WebSocket de Reverb para el turno
-  void _initShiftSocket() async {
-    final user = DriverAuthService().currentUser;
-    if (user == null) return;
+  Future<void> _checkAndForcePermissions() async {
+    final locationService = LocationService();
+    bool hasPermissions = await locationService.checkPermissions();
 
-    final storage = di.sl<StorageService>();
-    final token = await storage.getToken();
-    if (token == null) return;
+    if (!hasPermissions && mounted) {
+      _showPermissionExplanationDialog();
+    }
+  }
 
-    try {
-      final options = PusherChannelsOptions.fromHost(
-        scheme: dotenv.env['REVERB_SCHEME'] ?? 'wss',
-        host: dotenv.env['REVERB_HOST'] ?? 'api.vamosapp.com.co',
-        port: int.parse(dotenv.env['REVERB_PORT'] ?? '443'),
-        key: dotenv.env['REVERB_KEY'] ?? '06exymiubefjjglwmvqe',
-      );
-
-      _shiftPusherClient = PusherChannelsClient.websocket(
-        options: options,
-        connectionErrorHandler: (exception, trace, client) {
-          debugPrint("❌ SOCKET TURNO Error: $exception");
-        },
-      );
-
-      // Canal privado para el conductor mapeado en channels.php
-      final channel = _shiftPusherClient!.privateChannel(
-        "conductor.${user.id}",
-        authorizationDelegate:
-            EndpointAuthorizableChannelTokenAuthorizationDelegate.forPrivateChannel(
-              authorizationEndpoint: Uri.parse(
-                "https://api.vamosapp.com.co/broadcasting/auth",
-              ),
-              headers: {
-                "Authorization": "Bearer $token",
-                "Accept": "application/json",
-              },
+  void _showPermissionExplanationDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // Evita que se cierre tocando fuera
+      builder: (ctx) => PopScope(
+        canPop: false, // Bloquea el botón físico "atrás" de Android
+        child: Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: const Color(
+            0xFF161B2E,
+          ), // Fondo pizarra premium a juego
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      // ignore: deprecated_member_use
+                      color: Colors.red.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.security_rounded,
+                      color: Colors.redAccent,
+                      size: 40,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  "CONFIGURACIÓN REQUERIDA",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                    color: Colors.white,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  "Para poder recibir viajes y navegar, VAMOS requiere el acceso obligatorio a dos configuraciones críticas del sistema:\n\n"
+                  "1. Ubicación 'Permitir Siempre': Para rastrear tu ruta y ubicación en tiempo real cuando tengas la pantalla bloqueada.\n"
+                  "2. Optimización de Batería 'Sin Restricciones': Evita que el celular pause o bloquee el GPS de fondo para ahorrar batería.\n\n"
+                  "Sin otorgar ambas configuraciones, la aplicación no funcionará correctamente.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    color: const Color(0xFF94A3B8),
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(
+                        ctx,
+                      ); // Cierra temporalmente para evitar modales encimados
+                      final locationService = LocationService();
+                      bool success = await locationService.checkPermissions();
+                      if (success) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                "¡Configuraciones autorizadas con éxito!",
+                              ),
+                              backgroundColor: AppColors.primaryGreen,
+                            ),
+                          );
+                          // Re-inicializamos el servicio de GPS en el Provider
+                          context.read<HomeProvider>().initLocation();
+                        }
+                      } else {
+                        // Bucle de persistencia: Reabre si no se autorizaron
+                        if (mounted) {
+                          _showPermissionExplanationDialog();
+                        }
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryGreen,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Text(
+                      "OTORGAR ACCESOS",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-      );
-
-      // Escuchar el evento de cambio de estado
-      _shiftSocketSubscription = channel
-          .bind("App\\Events\\TurnoEstadoActualizadoEvent")
-          .listen((event) {
-            debugPrint("✅ SOCKET TURNO: Se recibió actualización de turno.");
-
-            // Ponemos al conductor inactivo localmente
-            _handleShiftForceOffline();
-          });
-
-      _shiftPusherClient!.connect();
-    } catch (e) {
-      debugPrint("❌ Error al conectar socket del turno: $e");
-    }
-  }
-
-  // 🟢 NUEVA FUNCIÓN: Cambia el estado a offline y muestra alerta
-  void _handleShiftForceOffline() {
-    if (!mounted) return;
-
-    // Cambiamos el estado en el HomeProvider a 'OFFLINE'
-    context.read<HomeProvider>().forzarEstadoOffline();
-
-    // Mostramos un mensaje explicativo sin sacarlo de su sesión
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("⚠️ Tu turno ha sido finalizado por el administrador."),
-        backgroundColor: Colors.orangeAccent,
-        duration: Duration(seconds: 4),
+          ),
+        ),
       ),
     );
   }
@@ -175,6 +227,21 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
 
     final provider = context.read<HomeProvider>();
+    if (provider.hasPendingLateAlert && provider.lateTrip != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showLateAlertDialog(context, provider);
+        }
+      });
+    }
+    // 🚀 NUEVA ESCUCHA: Levanta el Pop-up interactivo al llegar a cero
+    if (provider.hasPendingWaitingDecision && provider.activeTrip != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showWaitingDecisionDialog(context, provider);
+        }
+      });
+    }
     final trip = provider.activeTrip;
     final incoming = provider.incomingTrip;
 
@@ -269,10 +336,10 @@ class _HomeScreenState extends State<HomeScreen>
         if (_isTrackingDriver && _isMapReady) {
           final double currentZoom = _mapController.camera.zoom;
           final LatLng offsetCenter = _getOffsetPosition(newPos, currentZoom);
-          _animatedMapMove(
-            offsetCenter,
-            currentZoom,
-          ); // Paneado amortiguado de 700ms
+
+          // 🟢 CORREGIDO: Usamos move() directo para el auto-seguimiento continuo.
+          // Esto evita que se saturen los Tickers/Animaciones simultáneamente en el hilo principal.
+          _mapController.move(offsetCenter, currentZoom);
         }
       }
     }
@@ -331,24 +398,394 @@ class _HomeScreenState extends State<HomeScreen>
 
     // ... dentro de _onTripStateChanged() ...
     if (incoming != null) {
-      _centerMapOnData(
-        vehiclePos: provider.currentPosition,
-        targetPos: incoming.originLocation,
-      );
-    } else if (trip != null) {
-      if (trip.status == TripStatus.ARRIVED) {
-        // En el sitio: Centrar siempre a ambos actores dentro del espacio visible superior
-        _centerMapOnData(
-          vehiclePos: provider.currentPosition,
-          targetPos: provider.passengerLocation,
+      // 🟢 OPTIMIZACIÓN DE CÁMERA:
+      // Durante la oferta entrante, no alejamos el mapa con zoom gigante.
+      // Enfocamos de cerca al conductor (zoom 16.5) para que no haya saltos erráticos en la UI.
+      if (provider.currentPosition != null && _isMapReady) {
+        final double currentZoom = 16.5;
+        final LatLng offsetCenter = _getOffsetPosition(
+          provider.currentPosition!,
+          currentZoom,
         );
-      } else if (provider.routePoints.isNotEmpty && _animatedPosition == null) {
-        LatLng target = trip.status == TripStatus.ACCEPTED
-            ? trip.originLocation
-            : trip.destinationLocation;
-        _animatedMapMove(target, 15.5);
+        _animatedMapMove(offsetCenter, currentZoom);
+      }
+    } else if (trip != null) {
+      // 🟢 OPTIMIZACIÓN: Solo auto-encuadramos rutas de recogida o llegada
+      // si el conductor NO tiene el enganche de cámara permanente activo.
+      if (!_isTrackingDriver) {
+        if (trip.status == TripStatus.ARRIVED) {
+          _centerMapOnData(
+            vehiclePos: provider.currentPosition,
+            targetPos: provider.passengerLocation,
+          );
+        } else if (provider.routePoints.isNotEmpty &&
+            _animatedPosition == null) {
+          LatLng target = trip.status == TripStatus.ACCEPTED
+              ? trip.originLocation
+              : trip.destinationLocation;
+          _animatedMapMove(target, 15.5);
+        }
       }
     }
+  }
+
+  void _showWaitingDecisionDialog(BuildContext context, HomeProvider provider) {
+    provider.dismissWaitingDecision(); // Cierra el gatillo para evitar loops
+
+    showDialog(
+      context: context,
+      barrierDismissible:
+          false, // Obliga al conductor a elegir una de las dos opciones
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: const Color(
+          0xFF161B2E,
+        ), // Fondo pizarra profunda de su interfaz
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    // ignore: deprecated_member_use
+                    color: Colors.amber.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.timer_off_rounded,
+                    color: Colors.amberAccent,
+                    size: 40,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                "TIEMPO EXPIRO",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  color: Colors.white,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "El pasajero superó los 5 minutos de cortesía en el sitio. ¿Deseas seguir esperando (se cobrará tiempo extra) o cancelar por inasistencia?",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  color: const Color(0xFF94A3B8),
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Botón Aceptar Esperar (Cierra el modal y deja corriendo el cronómetro)
+              SizedBox(
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: Text(
+                    "SEGUIR ESPERANDO",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Botón Cancelar (Aplica multa al usuario en BD y libera al conductor)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  provider.cancelCurrentTrip(
+                    context,
+                  ); // Llama al método de cancelación asíncrono
+                },
+                child: Text(
+                  "CANCELAR (COBRAR INASISTENCIA)",
+                  style: GoogleFonts.montserrat(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ⏰ ALERTA VISUAL AVANZADA: Diálogo con información completa e inicio directo de ruta
+  void _showLateAlertDialog(BuildContext context, HomeProvider provider) {
+    final trip = provider.lateTrip;
+    if (trip == null) return;
+
+    // Reseteamos el estado en el provider para que la alerta no se vuelva a gatillar
+    provider.dismissLateAlert();
+
+    final String horaSalida = trip.scheduledAt != null
+        ? DateFormat('hh:mm a').format(trip.scheduledAt!.toLocal())
+        : "Acordada";
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        backgroundColor: const Color(0xFF161B2E), // Fondo pizarra premium
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. HEADER: Icono decorativo centrado de alerta
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.warning_amber_rounded,
+                    color: Colors.amberAccent,
+                    size: 44,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Título
+              Text(
+                "¡ESTÁS RETRASADO!",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.montserrat(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  color: Colors.white,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Mensaje descriptivo
+              Text(
+                "Tu viaje programado para las $horaSalida ya debió haber iniciado. Por favor, inicia la ruta o contacta al pasajero de inmediato.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  color: const Color(0xFF94A3B8), // Gris suave muy legible
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // 2. DETALLE DEL VIAJE (Ficha con iconos de Timeline)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xFF0B0F19,
+                  ), // Fondo oscuro para aislar la información
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.05),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    _buildLateAlertDetailRow(
+                      Icons.person_rounded,
+                      "Pasajero",
+                      trip.passengerName,
+                      Colors.blueAccent,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildLateAlertDetailRow(
+                      Icons.radio_button_checked_rounded,
+                      "Recogida",
+                      trip.originAddress,
+                      AppColors.primaryGreen,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildLateAlertDetailRow(
+                      Icons.location_on_rounded,
+                      "Destino",
+                      trip.destinationAddress,
+                      Colors.redAccent,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 28),
+
+              // 3. ACCIONES PRINCIPALES (Botonera Premium)
+              // 3. ACCIONES PRINCIPALES (Botonera Premium protegida)
+              SizedBox(
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    try {
+                      // 🟢 Ejecutamos de forma segura la ruta de encuentro
+                      bool exito = await provider.iniciarRutaAlOrigenConViaje(
+                        trip,
+                      );
+                      if (exito && ctx.mounted) {
+                        Navigator.pop(ctx); // Cierra el diálogo de alerta
+                      }
+                    } catch (e) {
+                      // Si falla por validaciones del backend, cerramos el diálogo y alertamos con SnackBar
+                      if (ctx.mounted) {
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              e.toString().replaceAll("Exception: ", ""),
+                              style: GoogleFonts.montserrat(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            backgroundColor: Colors.redAccent,
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    "IR AL ENCUENTRO",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontSize: 13,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text(
+                        "CERRAR",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.grey[500],
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        if (trip.passengerPhone != null &&
+                            trip.passengerPhone!.isNotEmpty) {
+                          final Uri whatsappUri = Uri.parse(
+                            "https://wa.me/${trip.passengerPhone!.replaceAll(RegExp(r'[^0-9]'), '')}",
+                          );
+                          if (await canLaunchUrl(whatsappUri)) {
+                            await launchUrl(
+                              whatsappUri,
+                              mode: LaunchMode.externalApplication,
+                            );
+                          }
+                        }
+                      },
+                      icon: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 16,
+                        color: Colors.orangeAccent,
+                      ),
+                      label: Text(
+                        "CONTACTAR",
+                        style: GoogleFonts.montserrat(
+                          color: Colors.orangeAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Método helper de soporte para estructurar las filas del diálogo
+  Widget _buildLateAlertDetailRow(
+    IconData icon,
+    String label,
+    String value,
+    Color color,
+  ) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: GoogleFonts.montserrat(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.grey[500],
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   List<LatLng> _trimRoutePointsLocal(
@@ -384,8 +821,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
-    _shiftSocketSubscription?.cancel();
-    _shiftPusherClient?.disconnect();
     _homeProvider.removeListener(_onTripStateChanged);
     WidgetsBinding.instance.removeObserver(this);
     _mapController.dispose();
@@ -469,18 +904,45 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<void> _launchExternalMap(String app, LatLng target) async {
+  Future<void> _launchExternalMap(
+    String app,
+    LatLng origin,
+    LatLng destination,
+    List<Map<String, dynamic>> stops,
+  ) async {
     Uri uri;
     if (app == 'google') {
-      uri = Uri.parse(
-        "google.navigation:q=${target.latitude},${target.longitude}",
-      );
-      if (!await canLaunchUrl(uri)) {
+      if (stops.isNotEmpty) {
+        // 🟢 GOOGLE MAPS MULTIPUNTO: Estructuramos origen, paradas (waypoints) y destino final
+        final String originStr = "${origin.latitude},${origin.longitude}";
+        final String destStr =
+            "${destination.latitude},${destination.longitude}";
+        final String waypointsStr = stops
+            .map((s) => "${s['lat']},${s['lng']}")
+            .join('|');
+
         uri = Uri.parse(
-          "https://www.google.com/maps/dir/?api=1&destination=${target.latitude},${target.longitude}",
+          "https://www.google.com/maps/dir/?api=1&origin=$originStr&destination=$destStr&waypoints=$waypointsStr&travelmode=driving",
         );
+      } else {
+        uri = Uri.parse(
+          "google.navigation:q=${destination.latitude},${destination.longitude}",
+        );
+        if (!await canLaunchUrl(uri)) {
+          uri = Uri.parse(
+            "https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}",
+          );
+        }
       }
     } else {
+      // 🟢 WAZE TRAMO POR TRAMO: Si hay paradas intermedias, lo guía primero a la parada más cercana, de lo contrario al destino
+      final LatLng target = stops.isNotEmpty
+          ? LatLng(
+              stops.first['lat']?.toDouble() ?? 0.0,
+              stops.first['lng']?.toDouble() ?? 0.0,
+            )
+          : destination;
+
       uri = Uri.parse(
         "waze://?ll=${target.latitude},${target.longitude}&navigate=yes",
       );
@@ -498,7 +960,12 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  void _showExternalNavSheet(BuildContext context, LatLng target) {
+  void _showExternalNavSheet(
+    BuildContext context,
+    LatLng origin,
+    LatLng target,
+    List<Map<String, dynamic>> stops,
+  ) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF111827),
@@ -544,7 +1011,7 @@ class _HomeScreenState extends State<HomeScreen>
                     child: InkWell(
                       onTap: () {
                         Navigator.pop(ctx);
-                        _launchExternalMap('google', target);
+                        _launchExternalMap('google', origin, target, stops);
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -578,7 +1045,7 @@ class _HomeScreenState extends State<HomeScreen>
                     child: InkWell(
                       onTap: () {
                         Navigator.pop(ctx);
-                        _launchExternalMap('waze', target);
+                        _launchExternalMap('waze', origin, target, stops);
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -679,8 +1146,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildAddressesTimelineView(Trip trip) {
+    final List paradas = trip.desglosePrecio?['paradas'] ?? [];
+
     return Column(
       children: [
+        // 1. Origen
         Row(
           children: [
             const Icon(
@@ -694,7 +1164,7 @@ class _HomeScreenState extends State<HomeScreen>
                 trip.originAddress,
                 style: GoogleFonts.montserrat(
                   fontSize: 13,
-                  color: Colors.white, // Texto blanco legible
+                  color: Colors.white,
                   fontWeight: FontWeight.w700,
                 ),
                 maxLines: 1,
@@ -703,17 +1173,67 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(left: 7),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              width: 2,
-              height: 16,
-              color: Colors.white24, // Línea gris clara
+
+        // 2. Paradas Intermedias (si existen)
+        if (paradas.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 7),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(width: 2, height: 12, color: Colors.white24),
             ),
           ),
-        ),
+          ...paradas.map((p) {
+            final String dir = p['direccion'] ?? 'Parada intermedia';
+            return Column(
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.adjust_rounded,
+                      size: 16,
+                      color: Colors.orangeAccent,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        dir,
+                        style: GoogleFonts.montserrat(
+                          fontSize: 13,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 7),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      width: 2,
+                      height: 12,
+                      color: Colors.white24,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }),
+        ] else ...[
+          Padding(
+            padding: const EdgeInsets.only(left: 7),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(width: 2, height: 16, color: Colors.white24),
+            ),
+          ),
+        ],
+
+        // 3. Destino Final
         Row(
           children: [
             const Icon(
@@ -727,7 +1247,7 @@ class _HomeScreenState extends State<HomeScreen>
                 trip.destinationAddress,
                 style: GoogleFonts.montserrat(
                   fontSize: 13,
-                  color: Colors.white, // Texto blanco legible
+                  color: Colors.white,
                   fontWeight: FontWeight.w700,
                 ),
                 maxLines: 1,
@@ -770,6 +1290,51 @@ class _HomeScreenState extends State<HomeScreen>
     } catch (e) {
       debugPrint("Error llamando SOS: $e");
     }
+  }
+
+  List<List<LatLng>> _splitRoutePoints(
+    List<LatLng> points,
+    List<Map<String, dynamic>> stops,
+  ) {
+    if (points.isEmpty) return [];
+    if (stops.isEmpty) return [points];
+
+    List<List<LatLng>> segments = [];
+    int lastIndex = 0;
+
+    for (var stop in stops) {
+      final double? stopLat = double.tryParse(stop['lat']?.toString() ?? '');
+      final double? stopLng = double.tryParse(stop['lng']?.toString() ?? '');
+      if (stopLat == null || stopLng == null) continue;
+
+      final stopLatLng = LatLng(stopLat, stopLng);
+      int closestIndex = lastIndex;
+      double minDistance = double.infinity;
+
+      for (int i = lastIndex; i < points.length; i++) {
+        double dist = Geolocator.distanceBetween(
+          points[i].latitude,
+          points[i].longitude,
+          stopLatLng.latitude,
+          stopLatLng.longitude,
+        );
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestIndex = i;
+        }
+      }
+
+      if (closestIndex > lastIndex) {
+        segments.add(points.sublist(lastIndex, closestIndex + 1));
+        lastIndex = closestIndex;
+      }
+    }
+
+    if (lastIndex < points.length) {
+      segments.add(points.sublist(lastIndex));
+    }
+
+    return segments;
   }
 
   // 🟢 AGREGAR ESTE MÉTODO AQUÍ ADENTRO DE _HomeScreenState:
@@ -946,7 +1511,9 @@ class _HomeScreenState extends State<HomeScreen>
     Trip trip,
   ) {
     final primaryColor = AppColors.primaryGreen;
-
+    // 🟢 SOLUCIÓN: El precio de viaje en curso del conductor muestra el valor neto real a cobrar (con descuento)
+    final String formattedPrice =
+        "\$${trip.passengerCashToPay.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}";
     return Container(
       color: AppColors.darkBlue,
       child: SafeArea(
@@ -985,7 +1552,7 @@ class _HomeScreenState extends State<HomeScreen>
                       // Logotipo de la aplicación
                       Image.asset(
                         'assets/images/logo.png',
-                        height: 220,
+                        height: 180,
                         fit: BoxFit.contain,
                       ),
                       const SizedBox(height: 24),
@@ -1065,19 +1632,19 @@ class _HomeScreenState extends State<HomeScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            "VIAJE EN CURSO",
+                            "VALOR ESTIMADO: $formattedPrice COP", // 🚀 Mostrar precio en viaje en curso para el conductor
                             style: GoogleFonts.montserrat(
-                              color: primaryColor,
+                              color: Colors.white,
                               fontWeight: FontWeight.w900,
-                              fontSize: 12,
-                              letterSpacing: 1.5,
+                              fontSize: 13,
+                              letterSpacing: 0.5,
                             ),
                           ),
                           Text(
-                            "Conduce con precaución",
+                            "Comisión descontada de tu billetera",
                             style: GoogleFonts.montserrat(
                               color: Colors.grey[400],
-                              fontSize: 11,
+                              fontSize: 10,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -1151,6 +1718,7 @@ class _HomeScreenState extends State<HomeScreen>
                 child: Column(
                   children: [
                     // Pasajero Principal
+                    // Pasajero Principal con Foto Dinámica en Caché
                     Row(
                       children: [
                         Container(
@@ -1167,11 +1735,23 @@ class _HomeScreenState extends State<HomeScreen>
                             backgroundColor: Colors.white.withValues(
                               alpha: 0.05,
                             ),
-                            child: const Icon(
-                              Icons.person_rounded,
-                              color: Colors.white,
-                              size: 22,
-                            ),
+                            // Sincronizado con CachedNetworkImageProvider para persistencia offline
+                            backgroundImage:
+                                (trip.passengerPhotoUrl != null &&
+                                    trip.passengerPhotoUrl!.isNotEmpty)
+                                ? CachedNetworkImageProvider(
+                                    trip.passengerPhotoUrl!,
+                                  )
+                                : null,
+                            child:
+                                (trip.passengerPhotoUrl == null ||
+                                    trip.passengerPhotoUrl!.isEmpty)
+                                ? const Icon(
+                                    Icons.person_rounded,
+                                    color: Colors.white,
+                                    size: 22,
+                                  )
+                                : null,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1271,7 +1851,13 @@ class _HomeScreenState extends State<HomeScreen>
                             onPressed: () {
                               _showExternalNavSheet(
                                 context,
+                                _animatedPosition ??
+                                    provider.currentPosition ??
+                                    const LatLng(0.0, 0.0),
                                 trip.destinationLocation,
+                                List<Map<String, dynamic>>.from(
+                                  trip.desglosePrecio?['paradas'] ?? [],
+                                ),
                               );
                             },
                             icon: const Icon(
@@ -1407,36 +1993,38 @@ class _HomeScreenState extends State<HomeScreen>
           LatLng target = trip.status == TripStatus.STARTED
               ? trip.destinationLocation
               : trip.originLocation;
-          _showExternalNavSheet(context, target);
+
+          _showExternalNavSheet(
+            context,
+            _animatedPosition ??
+                provider.currentPosition ??
+                const LatLng(0.0, 0.0),
+            target,
+            List<Map<String, dynamic>>.from(
+              trip.desglosePrecio?['paradas'] ?? [],
+            ),
+          );
         },
       ),
     );
   }
 
-  // --- BOTÓN DE CENTRADO ADAPTATIVO (Muestra a ambos actores en pantalla) ---
+  // --- BOTÓN DE CENTRADO CONSTANTE (Enfocado en el Conductor con offset inteligente) ---
   Widget _buildReCenterButton(HomeProvider provider) {
     return _buildPremiumButton(
       icon: Icons.my_location,
       onPressed: () {
         final LatLng? driverPos = provider.currentPosition;
-        final LatLng? passengerPos = provider.passengerLocation;
-        final trip = provider.activeTrip;
-
-        // Si estamos esperando en el sitio, encuadra a ambos (Conductor + Pasajero)
-        if (trip != null &&
-            trip.status == TripStatus.ARRIVED &&
-            driverPos != null &&
-            passengerPos != null) {
+        if (driverPos != null) {
           setState(() {
-            _isTrackingDriver =
-                false; // Desactivar seguimiento constante para permitir encuadre libre
-          });
-          _centerMapOnData(vehiclePos: driverPos, targetPos: passengerPos);
-        } else if (driverPos != null) {
-          setState(() {
+            // Activamos el seguimiento permanente de la cámara en el mapa
             _isTrackingDriver = true;
           });
-          _animatedMapMove(driverPos, 16.5);
+          final double currentZoom = _mapController.camera.zoom;
+
+          // 🟢 CORREGIDO: Pasamos la coordenada pura (driverPos).
+          // _animatedMapMove() se encargará de aplicarle el offset de manera limpia una sola vez.
+          _animatedMapMove(driverPos, currentZoom);
         }
       },
     );
@@ -1528,6 +2116,92 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Widget _buildMinimizedPanel(Trip trip) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 30),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B2E).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white10),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primaryGreen.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.navigation_rounded,
+              color: AppColors.primaryGreen,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "En camino",
+                  style: GoogleFonts.montserrat(
+                    color: AppColors.primaryGreen,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 10,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+                Text(
+                  trip.passengerName,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          // 🟢 BOTÓN EN REEPLAZO: Contenedor táctil inmune a desbordes de temas globales de Android
+          InkWell(
+            onTap: () {
+              setState(() {
+                _isPanelMinimized = false;
+              });
+            },
+            borderRadius: BorderRadius.circular(15),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen,
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Text(
+                "VER",
+                style: GoogleFonts.montserrat(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPanelContent(BuildContext context, HomeProvider provider) {
     if (provider.incomingTrip != null) {
       return TripRequestSheet(
@@ -1538,29 +2212,44 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     if (provider.activeTrip != null) {
-      final String statusStr = provider.activeTrip!.status.toString();
+      final trip = provider.activeTrip!;
+      final String statusStr = trip.status.toString();
 
-      // 🟢 FASE 1: Viaje programado en espera (Mostrar tarjeta de inicio de ruta)
+      // 1. Viaje programado asignado en espera
       if (statusStr.contains('SCHEDULED_ASSIGNED')) {
         return _buildScheduledAssignedSheet(context, provider);
       }
 
-      // 🟢 FASE 3: Conductor llegó al sitio (Diferencia entre Programado y Rápido)
+      // 2. Si es Yendo al Encuentro (ACCEPTED) y el conductor decidió colapsarlo
+      if (trip.status == TripStatus.ACCEPTED && _isPanelMinimized) {
+        return _buildMinimizedPanel(trip);
+      }
+
+      // 3. Conductor llegó al sitio (ARRIVED) - Requiere PIN si es programado
       if (statusStr.contains('ARRIVED')) {
+        // Al llegar al sitio, forzamos que el panel se expanda automáticamente
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _isPanelMinimized) {
+            setState(() => _isPanelMinimized = false);
+          }
+        });
+
         if (provider.isActiveTripScheduled) {
-          // Si el viaje es programado, exigimos el PIN de seguridad
           return _buildPinActivationSheet(context, provider);
         } else {
-          // Si es un viaje rápido, mostramos la hoja de control regular para iniciar ruta
-          return const TripPanelSheet();
+          return TripPanelSheet(
+            onMinimize: () => setState(() => _isPanelMinimized = true),
+          );
         }
       }
 
-      // FASES ACCEPTED (En camino al origen) y DROPPED_OFF (Esperando confirmación de pago)
-      return const TripPanelSheet();
+      // Por defecto, mandamos la función de colapsar al panel de viaje general
+      return TripPanelSheet(
+        onMinimize: () => setState(() => _isPanelMinimized = true),
+      );
     }
 
-    // --- PANEL DE CONTROL DE TURNOS EN TIEMPO REAL (SIN VIAJE ACTIVO) ---
+    // Panel de control de turnos en tiempo real
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(25, 25, 25, 35),
@@ -1610,7 +2299,7 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
 
-          // 3. ESTADO: ACTIVO (El conductor está en línea recibiendo ofertas)
+          // 🟢 BOTONERA ACTUALIZADA Y RESPONSIVA (SOPORTA PANTALLAS PEQUEÑAS)
           if (provider.turnoEstado == 'ACTIVO') ...[
             Row(
               children: [
@@ -1624,30 +2313,37 @@ class _HomeScreenState extends State<HomeScreen>
                           : () => provider.iniciarBreak(),
                       icon: const Icon(
                         Icons.coffee_rounded,
-                        color: Colors.orangeAccent,
+                        color: AppColors.primaryGreen,
+                        size: 16, // Reducido un píxel para ganar espacio
                       ),
-                      label: Text(
-                        "BREAK",
-                        style: GoogleFonts.montserrat(
-                          color: Colors.orangeAccent,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 11,
+                      label: FittedBox(
+                        // 🟢 CORREGIDO: Evita desbordes y wraps feos
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          "BREAK",
+                          style: GoogleFonts.montserrat(
+                            color: AppColors.primaryGreen,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(
-                          color: Colors.orangeAccent,
+                          color: AppColors.primaryGreen,
                           width: 1.5,
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                        ), // Margen interno responsivo
                       ),
                     ),
                   ),
                 ),
 
-                // 🟢 MEJORA: El botón de Almuerzo de 1 Hora desaparece si ya fue utilizado
                 if (!provider.alreadyHadLunch) ...[
                   const SizedBox(width: 8),
                   Expanded(
@@ -1670,13 +2366,18 @@ class _HomeScreenState extends State<HomeScreen>
                         icon: const Icon(
                           Icons.restaurant,
                           color: Colors.blueAccent,
+                          size: 16, // Reducido para espacio
                         ),
-                        label: Text(
-                          "ALMUERZO",
-                          style: GoogleFonts.montserrat(
-                            color: Colors.blueAccent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
+                        label: FittedBox(
+                          // 🟢 CORREGIDO: El texto "ALMUERZO" ya no saltará de línea
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            "ALMUERZO",
+                            style: GoogleFonts.montserrat(
+                              color: Colors.blueAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
                           ),
                         ),
                         style: OutlinedButton.styleFrom(
@@ -1687,12 +2388,14 @@ class _HomeScreenState extends State<HomeScreen>
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
                         ),
                       ),
                     ),
                   ),
                 ],
                 const SizedBox(width: 8),
+
                 // Botón para Terminar Turno (Cerrar)
                 Expanded(
                   child: SizedBox(
@@ -1712,13 +2415,18 @@ class _HomeScreenState extends State<HomeScreen>
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
                       ),
-                      child: Text(
-                        "CERRAR",
-                        style: GoogleFonts.montserrat(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          fontSize: 11,
+                      child: FittedBox(
+                        // 🟢 CORREGIDO: Evitamos desbordes en 'CERRAR'
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          "CERRAR",
+                          style: GoogleFonts.montserrat(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     ),
@@ -1727,7 +2435,6 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
           ],
-
           // 🟢 MEJORA ESTADO ALMUERZO: Solo se muestra el botón ancho para Volver al Turno
           if (provider.turnoEstado == 'ALMUERZO') ...[
             Container(
@@ -1872,12 +2579,18 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // 🟢 NUEVO: Tarjeta que se le muestra al conductor cuando tiene un viaje programado asignado en espera
+  // 🟢 NUEVO: Tarjeta que se le muestra al conductor cuando tiene un viaje programado asignado en espera (Con desglose de peajes)
   Widget _buildScheduledAssignedSheet(
     BuildContext context,
     HomeProvider provider,
   ) {
     final trip = provider.activeTrip!;
+
+    // Lectura segura de peajes desde el modelo
+    final double totalPeajes = (trip.desglosePrecio?['total_peajes'] ?? 0.0)
+        .toDouble();
+    final int numPeajes =
+        (trip.desglosePrecio?['peajes_detalles'] as List? ?? []).length;
 
     return Container(
       width: double.infinity,
@@ -1885,7 +2598,7 @@ class _HomeScreenState extends State<HomeScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF161B2E).withValues(alpha: 0.95),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(35)),
-        border: Border.all(color: Colors.white),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1934,6 +2647,50 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 12),
 
           _buildAddressesTimelineView(trip),
+
+          // 🟢 NUEVO: INDICADOR DE PEAJES DEL VIAJE PROGRAMADO
+          if (totalPeajes > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.orangeAccent.withValues(alpha: 0.25),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.toll_rounded,
+                    color: Colors.orangeAccent,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Peajes del viaje ($numPeajes):",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    "\$${totalPeajes.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.orangeAccent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           const SizedBox(height: 25),
 
           SizedBox(
@@ -1961,7 +2718,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // 🟢 NUEVO: Panel premium para que el conductor ingrese el PIN que le dicte el pasajero
+  // 🟢 NUEVA VERSIÓN: Incluye contador de espera y botón de gracia +3 minutos
   Widget _buildPinActivationSheet(BuildContext context, HomeProvider provider) {
     return Container(
       width: double.infinity,
@@ -1972,9 +2729,7 @@ class _HomeScreenState extends State<HomeScreen>
         MediaQuery.of(context).viewInsets.bottom + 30,
       ),
       decoration: BoxDecoration(
-        color: const Color(
-          0xFF161B2E,
-        ).withValues(alpha: 0.95), // Fondo oscuro a juego con tu UI
+        color: const Color(0xFF161B2E).withValues(alpha: 0.95),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(35)),
         border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
@@ -2014,6 +2769,65 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           const SizedBox(height: 20),
 
+          // ===================================================================
+          // 🟢 NUEVO: CONTADOR DE TIEMPO DE ESPERA DINÁMICO EN EL INGRESO DE PIN
+          // ===================================================================
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+            decoration: BoxDecoration(
+              color: provider.waitSeconds > 0
+                  ? const Color(0xFF10B981).withValues(
+                      alpha: 0.12,
+                    ) // Verde cortesía
+                  : Colors.amber.withValues(
+                      alpha: 0.12,
+                    ), // Amarillo espera extra
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: provider.waitSeconds > 0
+                    ? const Color(0xFF10B981).withValues(alpha: 0.25)
+                    : Colors.amberAccent.withValues(alpha: 0.25),
+                width: 1.5,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  provider.waitSeconds > 0
+                      ? Icons.hourglass_bottom_rounded
+                      : Icons.add_alarm_rounded,
+                  color: provider.waitSeconds > 0
+                      ? const Color(0xFF10B981)
+                      : Colors.amberAccent,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  provider.waitSeconds > 0
+                      ? "EL PASAJERO TIENE: ${_formatWaitTime(provider.waitSeconds)} MIN"
+                      : "COBRANDO ESPERA EXTRA: +${_formatWaitTime(provider.waitSeconds.abs())} MIN",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                    color: provider.waitSeconds > 0
+                        ? const Color(0xFF10B981)
+                        : Colors.amberAccent,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 🟢 NUEVO: BOTÓN DE GRACIA +3 MINUTOS (Solo si aún no expiran los 5 mins de cortesía)
+          if (provider.waitSeconds > 0) ...[
+            const SizedBox(height: 12),
+            _buildExtraWaitingTimeButton(context, provider),
+          ],
+
+          const SizedBox(height: 20),
+
           // CAMPO DE TEXTO PARA EL PIN
           TextField(
             controller: _pinController,
@@ -2029,7 +2843,10 @@ class _HomeScreenState extends State<HomeScreen>
             decoration: InputDecoration(
               counterText: "",
               hintText: "000000",
-              hintStyle: TextStyle(color: Colors.white24, letterSpacing: 8),
+              hintStyle: const TextStyle(
+                color: Colors.white24,
+                letterSpacing: 8,
+              ),
               filled: true,
               fillColor: const Color(0xFF0B0F19),
               enabledBorder: OutlineInputBorder(
@@ -2116,20 +2933,101 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // Calcula la compensación en píxeles verticales según el tamaño de la pantalla
+  // ===================================================================
+  // 🟢 METODOS DE SOPORTE PARA TIEMPO DE ESPERA (Colocar aquí al final de _HomeScreenState)
+  // ===================================================================
+  String _formatWaitTime(int seconds) {
+    final int mins = seconds ~/ 60;
+    final int secs = seconds % 60;
+    return "$mins:${secs.toString().padLeft(2, '0')}";
+  }
+
+  Widget _buildExtraWaitingTimeButton(
+    BuildContext context,
+    HomeProvider provider,
+  ) {
+    final bool yaAgregado = provider.extraWaitingTimeAdded;
+
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: OutlinedButton.icon(
+        onPressed: yaAgregado
+            ? null
+            : () async {
+                try {
+                  await provider.addExtraWaitingTime(3);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          "Se han adicionado +3 minutos al tiempo de espera del pasajero",
+                        ),
+                        backgroundColor: AppColors.primaryGreen,
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("No se pudo agregar tiempo extra: $e"),
+                        backgroundColor: Colors.redAccent,
+                      ),
+                    );
+                  }
+                }
+              },
+        icon: Icon(
+          Icons.add_alarm_rounded,
+          color: yaAgregado ? Colors.grey[600] : Colors.amberAccent,
+          size: 20,
+        ),
+        label: Text(
+          yaAgregado
+              ? "TIEMPO EXTRA MÁXIMO ADICIONADO"
+              : "ADICIONAR +3 MIN DE ESPERA",
+          style: GoogleFonts.montserrat(
+            color: yaAgregado ? Colors.grey[600] : Colors.amberAccent,
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+            letterSpacing: 0.8,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(
+            color: yaAgregado
+                ? (Colors.grey[800] ?? Colors.grey)
+                : Colors.amberAccent,
+            width: 1.5,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          backgroundColor: yaAgregado
+              // ignore: deprecated_member_use
+              ? Colors.white.withOpacity(0.02)
+              // ignore: deprecated_member_use
+              : Colors.amber.withOpacity(0.05),
+        ),
+      ),
+    );
+  }
+
+  // --- MEJORA: Centrado dinámico adaptativo según el estado de apertura/minimizado del panel ---
   double _getVerticalOffset() {
     final screenHeight = MediaQuery.of(context).size.height;
     final provider = context.read<HomeProvider>();
     final trip = provider.activeTrip;
 
-    if (trip != null) {
-      if (trip.status == TripStatus.ACCEPTED ||
-          trip.status == TripStatus.ARRIVED) {
-        // Desplazar el centro de la cámara hacia abajo un 23% de la altura de la pantalla
-        // proyecta el vehículo perfectamente en el centro de la mitad superior visible.
-        return screenHeight * 0.23;
-      }
+    // Si hay un viaje activo y el panel NO está minimizado (está abierto en pantalla),
+    // aplicamos un pequeño offset seguro del 11% para subir el auto y que no quede oculto bajo la tarjeta.
+    if (trip != null && !_isPanelMinimized) {
+      return screenHeight * 0.11;
     }
+
+    // Si el panel está colapsado (minimizado) o no hay viaje activo, centramos al auto perfectamente en el medio
     return 0.0;
   }
 
@@ -2173,218 +3071,676 @@ class _HomeScreenState extends State<HomeScreen>
     final LatLng initialCenter =
         homeProvider.currentPosition ?? const LatLng(4.6097, -74.0817);
 
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: const SideMenu(),
-      body: Stack(
-        children: [
-          // ===================================================================
-          // 1. EL MAPA Y LAS CAPAS ESTÁTICAS (No se reconstruyen nunca al mover el GPS)
-          // ===================================================================
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: initialCenter,
-              initialZoom: 16.0,
-              onMapReady: () {
-                setState(() => _isMapReady = true);
-                final currentPos = context.read<HomeProvider>().currentPosition;
-                if (currentPos != null &&
-                    context.read<HomeProvider>().activeTrip == null &&
-                    context.read<HomeProvider>().incomingTrip == null) {
-                  _mapController.move(currentPos, 16.5);
-                }
-              },
-              onPositionChanged: (camera, hasGesture) {
-                if (hasGesture && _isTrackingDriver) {
-                  setState(() {
-                    _isTrackingDriver = false;
-                  });
-                }
-              },
+    // 🟢 ENVOLVEMOS EL RETORNO EN UN POPSCOPE DE SEGURIDAD
+    return PopScope(
+      canPop:
+          false, // Bloquea el cierre automático de la pantalla para evitar volver a WelcomeScreen
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+
+        final provider = context.read<HomeProvider>();
+
+        // ESCUDO: Si el conductor tiene un viaje en curso, evitamos que salga por accidente
+        if (provider.activeTrip != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                "⚠️ Tienes un servicio activo en curso. No puedes salir en este momento.",
+                style: GoogleFonts.montserrat(fontWeight: FontWeight.bold),
+              ),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
             ),
-            children: [
-              TileLayer(
-                urlTemplate:
-                    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                subdomains: const ['a', 'b', 'c', 'd'],
-                tileProvider: CachedTileProvider(),
-                retinaMode: true,
-                maxNativeZoom: 18,
-                minNativeZoom: 10,
-                keepBuffer: 1,
-                panBuffer: 0,
-                tileBuilder: (context, tileWidget, tile) {
-                  return ColorFiltered(
-                    colorFilter: const ColorFilter.matrix([
-                      2.2,
-                      0.0,
-                      0.0,
-                      0.0,
-                      35.0,
-                      0.0,
-                      2.2,
-                      0.0,
-                      0.0,
-                      35.0,
-                      0.0,
-                      0.0,
-                      2.2,
-                      0.0,
-                      35.0,
-                      0.0,
-                      0.0,
-                      0.0,
-                      1.0,
-                      0.0,
-                    ]),
-                    child: tileWidget,
+          );
+          return;
+        }
+
+        // Si no hay viaje activo, minimiza la aplicación limpiamente a segundo plano
+        // sin alterar el token ni destruir el estado de autenticación.
+        SystemNavigator.pop();
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: const SideMenu(),
+        body: Stack(
+          children: [
+            // ... Mantiene todo tu contenido exactamente igual ...
+            // ===================================================================
+            // 1. EL MAPA Y LAS CAPAS ESTÁTICAS (No se reconstruyen nunca al mover el GPS)
+            // ===================================================================
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: initialCenter,
+                initialZoom: 16.0,
+                onMapReady: () {
+                  setState(() => _isMapReady = true);
+                  final currentPos = context
+                      .read<HomeProvider>()
+                      .currentPosition;
+                  if (currentPos != null &&
+                      context.read<HomeProvider>().activeTrip == null &&
+                      context.read<HomeProvider>().incomingTrip == null) {
+                    _mapController.move(currentPos, 16.5);
+                  }
+                },
+                onPositionChanged: (camera, hasGesture) {
+                  if (hasGesture && _isTrackingDriver) {
+                    setState(() {
+                      _isTrackingDriver = false;
+                    });
+                  }
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
+                  tileProvider: CachedTileProvider(),
+                  retinaMode: true,
+                  maxNativeZoom: 18,
+                  minNativeZoom: 10,
+                  keepBuffer: 1,
+                  panBuffer: 0,
+                  tileBuilder: (context, tileWidget, tile) {
+                    return ColorFiltered(
+                      colorFilter: const ColorFilter.matrix([
+                        2.2,
+                        0.0,
+                        0.0,
+                        0.0,
+                        35.0,
+                        0.0,
+                        2.2,
+                        0.0,
+                        0.0,
+                        35.0,
+                        0.0,
+                        0.0,
+                        2.2,
+                        0.0,
+                        35.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                      ]),
+                      child: tileWidget,
+                    );
+                  },
+                ),
+
+                // CAPA DE POLILÍNEAS OPTIMIZADA (Solo se reconstruye si cambian las rutas)
+                Consumer<HomeProvider>(
+                  builder: (context, provider, _) {
+                    final trip = provider.activeTrip;
+                    final incoming = provider.incomingTrip;
+                    final bool isArrived =
+                        trip != null && trip.status == TripStatus.ARRIVED;
+
+                    final pointsToDraw = provider.routePoints.isEmpty
+                        ? <LatLng>[]
+                        : (_animatedRoutePoints.isNotEmpty
+                              ? _animatedRoutePoints
+                              : provider.routePoints);
+
+                    if (pointsToDraw.isNotEmpty &&
+                        incoming == null &&
+                        !isArrived) {
+                      // Extraemos paradas
+                      final List<Map<String, dynamic>> stops = [];
+
+                      // 🟢 CORRECCIÓN CRÍTICA: Solo cargamos paradas intermedias en la fase EN CURSO (STARTED).
+                      // Durante la aproximación al origen (ACCEPTED) NO se debe segmentar la polilínea.
+                      if (trip != null &&
+                          trip.status == TripStatus.STARTED &&
+                          trip.desglosePrecio != null &&
+                          trip.desglosePrecio!['paradas'] != null) {
+                        stops.addAll(
+                          List<Map<String, dynamic>>.from(
+                            trip.desglosePrecio!['paradas'],
+                          ),
+                        );
+                      }
+
+                      // 🟢 Segmentamos la ruta del conductor
+                      final List<List<LatLng>> segments = _splitRoutePoints(
+                        pointsToDraw,
+                        stops,
+                      );
+
+                      final List<Polyline> polylinesToDraw = [];
+
+                      for (int i = 0; i < segments.length; i++) {
+                        final bool isLastSegment = (i == segments.length - 1);
+                        polylinesToDraw.add(
+                          Polyline(
+                            points: segments[i],
+                            strokeWidth: 5.0,
+                            // 🟢 Sincronizado: Naranja para paradas, Azul para el destino en conductor
+                            color: isLastSegment
+                                ? Colors.blueAccent
+                                : Colors.deepOrangeAccent,
+                          ),
+                        );
+                      }
+
+                      return PolylineLayer(polylines: polylinesToDraw);
+                    }
+
+                    return const SizedBox.shrink();
+                  },
+                ),
+
+                // CAPA DE MARCADORES OPTIMIZADA (Usa su propio Consumer interno)
+                _MarkersLayer(
+                  animatedPosition: _animatedPosition,
+                  animatedHeading: _animatedHeading,
+                  animatedPassengerPosition: _animatedPassengerPosition,
+                ),
+              ],
+            ),
+
+            // ===================================================================
+            // 2. CAPAS SUPERIORES E INTERFAZ (Se reconstruyen de forma aislada)
+            // ===================================================================
+            Consumer<HomeProvider>(
+              builder: (context, provider, _) {
+                final trip = provider.activeTrip;
+                final incoming = provider.incomingTrip;
+
+                // 🟢 RE-ESTABLECIDO: SI EL VIAJE ESTÁ EN CURSO (STARTED), MOSTRAR VISTA SIN MAPA
+                if (trip != null && trip.status == TripStatus.STARTED) {
+                  if (_isMapReady) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) setState(() => _isMapReady = false);
+                    });
+                  }
+                  return _buildFullScreenDriverTripView(
+                    context,
+                    provider,
+                    trip,
                   );
-                },
-              ),
-
-              // CAPA DE POLILÍNEAS OPTIMIZADA (Solo se reconstruye si cambian las rutas)
-              Consumer<HomeProvider>(
-                builder: (context, provider, _) {
-                  final trip = provider.activeTrip;
-                  final incoming = provider.incomingTrip;
-                  final bool isArrived =
-                      trip != null && trip.status == TripStatus.ARRIVED;
-
-                  final pointsToDraw = provider.routePoints.isEmpty
-                      ? <LatLng>[]
-                      : (_animatedRoutePoints.isNotEmpty
-                            ? _animatedRoutePoints
-                            : provider.routePoints);
-
-                  if (pointsToDraw.isNotEmpty &&
-                      incoming == null &&
-                      !isArrived) {
-                    return PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: pointsToDraw,
-                          color: Colors.blueAccent,
-                          strokeWidth: 5.0,
-                        ),
-                      ],
-                    );
-                  }
-
-                  if (isArrived &&
-                      _animatedPosition != null &&
-                      _animatedPassengerPosition != null) {
-                    return PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: [
-                            _animatedPosition!,
-                            _animatedPassengerPosition!,
-                          ],
-                          // ignore: deprecated_member_use
-                          color: Colors.blueAccent.withOpacity(0.6),
-                          strokeWidth: 4.0,
-                          pattern: const StrokePattern.dotted(),
-                        ),
-                      ],
-                    );
-                  }
-
-                  return const SizedBox.shrink();
-                },
-              ),
-
-              // CAPA DE MARCADORES OPTIMIZADA (Usa su propio Consumer interno)
-              _MarkersLayer(
-                animatedPosition: _animatedPosition,
-                animatedHeading: _animatedHeading,
-                animatedPassengerPosition: _animatedPassengerPosition,
-              ),
-            ],
-          ),
-
-          // ===================================================================
-          // 2. CAPAS SUPERIORES E INTERFAZ (Se reconstruyen de forma aislada)
-          // ===================================================================
-          Consumer<HomeProvider>(
-            builder: (context, provider, _) {
-              final trip = provider.activeTrip;
-              final incoming = provider.incomingTrip;
-
-              // Si el viaje está en curso (STARTED), mostramos la vista sin mapa
-              if (trip != null && trip.status == TripStatus.STARTED) {
-                if (_isMapReady) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() => _isMapReady = false);
-                  });
                 }
-                return _buildFullScreenDriverTripView(context, provider, trip);
-              }
 
-              return Stack(
-                children: [
-                  if (trip == null && incoming == null) _buildMenuButton(),
-                  if (trip == null && incoming == null)
-                    _buildOnlineStatusIndicator(provider),
-                  if (provider.isNetworkDisconnected ||
-                      provider.isGpsSignalLost)
+                // 🟢 BLINDADO: SI EL VIAJE ESTÁ EN ESPERA DE PAGO (DROPPED_OFF), MOSTRAR COBRO A PANTALLA COMPLETA
+                if (trip != null && trip.status == TripStatus.DROPPED_OFF) {
+                  if (_isMapReady) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) setState(() => _isMapReady = false);
+                    });
+                  }
+                  return Scaffold(
+                    backgroundColor: const Color(
+                      0xFF0B0F19,
+                    ), // Fondo oscuro de la app
+                    body: SafeArea(
+                      child: PaymentWaitingSheet(
+                        tripId: trip.id,
+                        amount: trip.price,
+                        paymentMethod: trip.paymentMethod,
+                        onPaymentConfirmed: (Trip freshTrip) {
+                          // 🟢 SINCRO: Llama al método público del provider para actualizar billetera, historial y mostrar el popup de éxito
+                          provider.finalizeTripWithWallet(context, freshTrip);
+                        },
+                      ),
+                    ),
+                  );
+                }
+
+                return Stack(
+                  children: [
+                    if (trip?.status != TripStatus.STARTED) _buildMenuButton(),
+                    if (trip == null && incoming == null)
+                      _buildOnlineStatusIndicator(provider),
+                    if (provider.isNetworkDisconnected ||
+                        provider.isGpsSignalLost)
+                      Positioned(
+                        top: 90,
+                        left: 20,
+                        right: 20,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (provider.isNetworkDisconnected)
+                              _buildStatusBanner(
+                                icon: Icons.cloud_off_rounded,
+                                message:
+                                    "Sin conexión a internet. Intentando reconectar...",
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            if (provider.isGpsSignalLost &&
+                                !provider.isNetworkDisconnected)
+                              _buildStatusBanner(
+                                icon: Icons.gps_off_rounded,
+                                message: "Señal de GPS débil o inestable.",
+                                backgroundColor: Colors.orangeAccent,
+                              ),
+                          ],
+                        ),
+                      ),
                     Positioned(
-                      top: 90,
-                      left: 20,
-                      right: 20,
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          if (provider.isNetworkDisconnected)
-                            _buildStatusBanner(
-                              icon: Icons.cloud_off_rounded,
-                              message:
-                                  "Sin conexión a internet. Intentando reconectar...",
-                              backgroundColor: Colors.redAccent,
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              right: 20,
+                              bottom: 16,
                             ),
-                          if (provider.isGpsSignalLost &&
-                              !provider.isNetworkDisconnected)
-                            _buildStatusBanner(
-                              icon: Icons.gps_off_rounded,
-                              message: "Señal de GPS débil o inestable.",
-                              backgroundColor: Colors.orangeAccent,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (trip != null) ...[
+                                  _buildWazeButton(provider),
+                                  const SizedBox(height: 12),
+                                ],
+                                if (!_isTrackingDriver &&
+                                    provider.currentPosition != null &&
+                                    incoming == null)
+                                  _buildReCenterButton(provider),
+                              ],
                             ),
+                          ),
+                          _buildPanelContent(context, provider),
                         ],
                       ),
                     ),
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(right: 20, bottom: 16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (trip != null) ...[
-                                _buildWazeButton(provider),
-                                const SizedBox(height: 12),
+                  ],
+                );
+              },
+            ),
+            // === TARJETA INTERACTIVA DE PROPUESTA DE RUTA SOBRE EL MAPA ===
+            Consumer<HomeProvider>(
+              builder: (context, provider, _) {
+                if (!provider.hasPendingRouteChangeProposal) {
+                  return const SizedBox.shrink();
+                }
+
+                return Container(
+                  color: Colors
+                      .black54, // Fondo oscurecido para concentrar la atención
+                  width: double.infinity,
+                  height: double.infinity,
+                  alignment: Alignment.center,
+                  child: Dialog(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    backgroundColor: const Color(0xFF1F2937),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              // ignore: deprecated_member_use
+                              color: Colors.amberAccent.withOpacity(0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.alt_route_rounded,
+                              color: Colors.amberAccent,
+                              size: 40,
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Text(
+                            "Cambio de Ruta Propuesto",
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.montserrat(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 18,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            "El pasajero solicita modificar el trayecto en curso:",
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.montserrat(
+                              color: Colors.grey[400],
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // 🟢 TIMELINE DETALLADO DE PARADAS Y DURACIÓN POR TRAMOS
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF111827),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white10),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.map_rounded,
+                                      color: Colors.orangeAccent,
+                                      size: 14,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "ITINERARIO DE LA PROPUESTA",
+                                      style: GoogleFonts.montserrat(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        color: Colors.orangeAccent,
+                                        letterSpacing: 1.1,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+
+                                // Renderizado de las paradas intermedias propuestas
+                                if (provider.proposedNewStops.isNotEmpty) ...[
+                                  for (
+                                    int i = 0;
+                                    i < provider.proposedNewStops.length;
+                                    i++
+                                  ) ...[
+                                    _proposedTimelineRow(
+                                      Icons.adjust_rounded,
+                                      "PARADA ${i + 1}: ${provider.proposedNewStops[i]['direccion']}",
+                                      "${provider.proposedNewStops[i]['tiempo_tramo_minutos'] ?? 0} min",
+                                      Colors.orangeAccent,
+                                    ),
+                                    _proposedTimelineLine(),
+                                  ],
+                                ],
+
+                                // Destino Final Propuesto
+                                _proposedTimelineRow(
+                                  Icons.location_on_rounded,
+                                  "DESTINO: ${provider.proposedNewDestination}",
+                                  "${provider.proposedFinalSegmentMinutes} min",
+                                  Colors.redAccent,
+                                ),
                               ],
-                              if (!_isTrackingDriver &&
-                                  provider.currentPosition != null &&
-                                  incoming == null)
-                                _buildReCenterButton(provider),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+
+                          // DESGLOSE FINANCIERO PREMIUM Y DURACIÓN TOTAL CONSOLIDADA
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF111827),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        "NUEVO VALOR A COBRAR:",
+                                        style: TextStyle(
+                                          color: Colors.grey[400],
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "\$ ${provider.proposedNewPrice.toStringAsFixed(0)}",
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(
+                                  color: Colors.white12,
+                                  height: 16,
+                                ),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        "NUEVA GANANCIA NETA:",
+                                        style: TextStyle(
+                                          color: Colors.grey[400],
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "\$ ${provider.proposedNewDriverRevenue.toStringAsFixed(0)}",
+                                      style: const TextStyle(
+                                        color: Color(0xFF10B981),
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(
+                                  color: Colors.white12,
+                                  height: 16,
+                                ),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        "DURACIÓN ESTIMADA TOTAL:",
+                                        style: TextStyle(
+                                          color: Colors.grey[400],
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "${provider.proposedNewDurationMinutes} MIN",
+                                      style: const TextStyle(
+                                        color: Colors.amberAccent,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(
+                                  color: Colors.white12,
+                                  height: 16,
+                                ),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        "NUEVOS PEAJES EN RUTA:",
+                                        style: TextStyle(
+                                          color: Colors.orangeAccent,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "\$ ${provider.proposedNewTolls.toStringAsFixed(0)}",
+                                      style: const TextStyle(
+                                        color: Colors.orangeAccent,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // 🟢 NUEVO BOTÓN: PERMITE AL CONDUCTOR VERIFICAR LA NUEVA RUTA EN GOOGLE MAPS / WAZE ANTES DE ACEPTAR
+                          SizedBox(
+                            height: 48,
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                _showExternalNavSheet(
+                                  context,
+                                  _animatedPosition ??
+                                      provider.currentPosition ??
+                                      const LatLng(0.0, 0.0),
+                                  LatLng(
+                                    provider.proposedLatDestino,
+                                    provider.proposedLngDestino,
+                                  ),
+                                  List<Map<String, dynamic>>.from(
+                                    provider.proposedNewStops,
+                                  ),
+                                );
+                              },
+                              icon: const Icon(
+                                Icons.map_rounded,
+                                color: Colors.amberAccent,
+                                size: 18,
+                              ),
+                              label: Text(
+                                "VERIFICAR NUEVA RUTA EN GPS",
+                                style: GoogleFonts.montserrat(
+                                  color: Colors.amberAccent,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(
+                                  color: Colors.amberAccent,
+                                  width: 1.5,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextButton(
+                                  onPressed: () {
+                                    provider.responderPropuestaRuta(
+                                      false,
+                                    ); // Rechazar
+                                  },
+                                  child: Text(
+                                    "RECHAZAR",
+                                    style: GoogleFonts.montserrat(
+                                      color: Colors.redAccent,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    provider.responderPropuestaRuta(
+                                      true,
+                                    ); // Aceptar
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF10B981),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    "ACEPTAR CAMBIO",
+                                    style: GoogleFonts.montserrat(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        _buildPanelContent(context, provider),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ],
-              );
-            },
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _proposedTimelineRow(
+    IconData icon,
+    String label,
+    String duration,
+    Color color,
+  ) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            label,
+            style: GoogleFonts.montserrat(
+              fontSize: 12,
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
-        ],
+        ),
+        const SizedBox(width: 10),
+        Text(
+          duration,
+          style: GoogleFonts.montserrat(
+            fontSize: 12,
+            color: color,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _proposedTimelineLine() {
+    return Padding(
+      padding: const EdgeInsets.only(left: 7),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(width: 2, height: 12, color: Colors.white24),
       ),
     );
   }
@@ -3272,7 +4628,7 @@ class _VehicleModal extends StatelessWidget {
 class _MarkersLayer extends StatelessWidget {
   final LatLng? animatedPosition;
   final double animatedHeading;
-  final LatLng? animatedPassengerPosition; // Agregado
+  final LatLng? animatedPassengerPosition;
 
   const _MarkersLayer({
     required this.animatedPosition,
@@ -3291,9 +4647,35 @@ class _MarkersLayer extends StatelessWidget {
             ? animatedHeading
             : provider.currentHeading;
 
-        // Si tenemos posición suavizada la usamos, sino recurrimos al fallback del proveedor
         final LatLng? passengerPosToDraw =
             animatedPassengerPosition ?? provider.passengerLocation;
+
+        // 🟢 Extraer de forma segura las paradas intermedias si existen
+        final List<Marker> stopMarkers = [];
+        if (trip != null &&
+            trip.desglosePrecio != null &&
+            trip.desglosePrecio!['paradas'] != null) {
+          final paradas = trip.desglosePrecio!['paradas'] as List;
+          for (var stop in paradas) {
+            final double? lat = double.tryParse(stop['lat']?.toString() ?? '');
+            final double? lng = double.tryParse(stop['lng']?.toString() ?? '');
+            if (lat != null && lng != null) {
+              stopMarkers.add(
+                Marker(
+                  point: LatLng(lat, lng),
+                  width: 30,
+                  height: 30,
+                  child: const Icon(
+                    Icons
+                        .flag_circle_rounded, // 👈 Icono de bandera para paradas
+                    color: Colors.deepOrangeAccent, // 👈 Color naranja/ámbar
+                    size: 28,
+                  ),
+                ),
+              );
+            }
+          }
+        }
 
         if (trip == null ||
             (trip.status != TripStatus.ACCEPTED &&
@@ -3303,11 +4685,11 @@ class _MarkersLayer extends StatelessWidget {
             markers: [
               if (posToDraw != null)
                 _buildDriverMarker(posToDraw, headingToDraw),
+              ...stopMarkers, // 🟢 Paradas agregadas
             ],
           );
         }
 
-        // Caso B: Renderizado directo y eficiente con coordenadas animadas unificadas
         // Caso B: Renderizado directo y eficiente con coordenadas animadas unificadas
         return MarkerLayer(
           markers: [
@@ -3347,12 +4729,15 @@ class _MarkersLayer extends StatelessWidget {
                 ),
               ),
             ),
+
+            ...stopMarkers, // 🟢 Paradas agregadas
           ],
         );
       },
     );
   }
 
+  // 🟢 METODO DE AYUDA RESTAURADO
   Marker _buildDriverMarker(LatLng pos, double heading) {
     return Marker(
       point: pos,

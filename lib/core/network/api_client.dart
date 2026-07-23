@@ -17,8 +17,10 @@ class ApiClient {
     _dio = Dio(
       BaseOptions(
         baseUrl: dotenv.env['API_URL'] ?? 'https://api.vamosapp.com.co/api',
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(seconds: 30),
+        connectTimeout: const Duration(
+          seconds: 10,
+        ), // Reducido de 30s a 10s para reaccionar más rápido sin internet
+        receiveTimeout: const Duration(seconds: 15), // Reducido de 30s a 15s
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -35,16 +37,14 @@ class ApiClient {
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           } else {
-            // --- MODIFICACIÓN AQUÍ ---
-            // Definimos las rutas públicas (las que no requieren token)
             final publicPaths = [
               '/login',
               '/register',
               '/check-account',
-              '/password/email', // <--- AGREGADO
-              '/password/code/check', // <--- AGREGADO
-              '/password/reset', // <--- AGREGADO
-              '/empresas', // <--- Agregar para permitir consultar empresas sin token
+              '/password/email',
+              '/password/code/check',
+              '/password/reset',
+              '/empresas',
               '/empresas/afiliar',
             ];
 
@@ -67,7 +67,6 @@ class ApiClient {
           );
           return handler.next(response);
         },
-        // En lib/core/network/api_client.dart
         onError: (DioException e, handler) async {
           final statusCode = e.response?.statusCode;
           final path = e.requestOptions.path;
@@ -76,6 +75,37 @@ class ApiClient {
             '❌ ERROR: $path | STATUS: $statusCode',
             name: 'API_DEBUG',
           );
+
+          // =====================================================================
+          // REINTENTOS DE RED INTEGRADOS PARA TOLERANCIA EN COBERTURAS DÉBILES 4G
+          // =====================================================================
+          final isNetworkError =
+              e.type == DioExceptionType.connectionTimeout ||
+              e.type == DioExceptionType.receiveTimeout ||
+              e.type == DioExceptionType.connectionError;
+
+          // Reintentar solicitudes de lectura seguras (no destructivas) de forma automática
+          if (isNetworkError && e.requestOptions.method == 'GET') {
+            final int maxRetries = 3;
+            int retryAttempt = e.requestOptions.headers['retry_attempt'] ?? 0;
+
+            if (retryAttempt < maxRetries) {
+              retryAttempt++;
+              e.requestOptions.headers['retry_attempt'] = retryAttempt;
+              final delaySeconds = retryAttempt * retryAttempt;
+
+              developer.log(
+                "⚠️ [REINTENTO CONEXIÓN] Reintentando ($retryAttempt/$maxRetries) en $delaySeconds segundos para: $path",
+                name: 'API_DEBUG',
+              );
+              await Future.delayed(Duration(seconds: delaySeconds));
+
+              try {
+                final response = await _dio.fetch(e.requestOptions);
+                return handler.resolve(response);
+              } catch (_) {}
+            }
+          }
 
           // 1. RUTAS INTOCABLES: Bajo ninguna circunstancia cerramos sesión.
           final whiteList = [
@@ -86,8 +116,8 @@ class ApiClient {
             '/tracking',
             '/iniciar',
             '/finalizar',
-            '/viaje-activo', // <--- IMPORTANTE: Agregamos esto
-            '/viajes/activo', // <--- IMPORTANTE: Agregamos esto
+            '/viaje-activo',
+            '/viajes/activo',
           ];
 
           if (whiteList.any((p) => path.contains(p))) {
@@ -95,7 +125,6 @@ class ApiClient {
           }
 
           // 2. LOGOUT SOLO SI ES UNA PETICIÓN DE "ME" (Perfil) Y ES 401
-          // Si falla el perfil, es que el token realmente murió.
           if (statusCode == 401 && path.contains('/me')) {
             final storage = sl<StorageService>();
             final token = await storage.getToken();
@@ -116,7 +145,6 @@ class ApiClient {
       ),
     );
   }
-
   Dio get dio => _dio;
 
   String get envType => dotenv.env['ENV_TYPE'] ?? 'MOCK';

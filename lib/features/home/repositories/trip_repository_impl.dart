@@ -266,12 +266,54 @@ class ApiTripRepository implements TripRepository {
             }
           }
 
+          // 🟢 NUEVO PROCESADOR PARA VIAJE ESTADO
+          void procesarViajeEstado(dynamic e) {
+            debugPrint(
+              "🚨 [SOCKET] ESTADO DE VIAJE RECIBIDO EN CONDUCTOR: ${e.data}",
+            );
+            if (e.data != null) {
+              try {
+                final Map<String, dynamic> rawData = e.data is String
+                    ? json.decode(e.data!)
+                    : Map<String, dynamic>.from(e.data);
+
+                final Map<String, dynamic> viajeData =
+                    rawData.containsKey('viaje')
+                    ? Map<String, dynamic>.from(rawData['viaje'])
+                    : rawData;
+
+                // Asegurar compatibilidad de campos requeridos
+                if (rawData.containsKey('estado') &&
+                    !viajeData.containsKey('estado')) {
+                  viajeData['estado'] = rawData['estado'];
+                }
+
+                // Ajustes de tipos double por seguridad
+                if (viajeData['precio_estimado'] is int) {
+                  viajeData['precio_estimado'] =
+                      (viajeData['precio_estimado'] as int).toDouble();
+                }
+
+                final Trip updatedTrip = Trip.fromMap(viajeData);
+                controller.add(updatedTrip);
+              } catch (ex, stacktrace) {
+                debugPrint("❌ Error procesando ViajeEstado en conductor: $ex");
+                debugPrint("❌ Stacktrace: $stacktrace");
+              }
+            }
+          }
+
           myChannel.bind('nueva.asignacion').listen(procesarNuevaAsignacion);
           myChannel.bind('.nueva.asignacion').listen(procesarNuevaAsignacion);
           myChannel
               .bind('App\\Events\\NuevaAsignacion')
               .listen(procesarNuevaAsignacion);
-
+          // 🟢 NUEVOS BINDS PARA ESCUCHAR ESTADOS DE VIAJE (COMO PROPUESTAS DE RUTA EN CURSO)
+          myChannel.bind('ViajeEstado').listen(procesarViajeEstado);
+          myChannel.bind('.ViajeEstado').listen(procesarViajeEstado);
+          myChannel
+              .bind('App\\Events\\ViajeEstadoEvent')
+              .listen(procesarViajeEstado);
           myChannel.bind('ViajeCancelado').listen(procesarCancelacion);
           myChannel.bind('.ViajeCancelado').listen(procesarCancelacion);
           myChannel

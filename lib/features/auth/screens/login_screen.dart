@@ -135,7 +135,64 @@ class _LoginScreenState extends State<LoginScreen> {
       _navigateBasedOnStatus(user);
     } catch (e) {
       if (!mounted) return;
-      _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
+
+      final String errorMsg = e.toString().toLowerCase();
+
+      // 🟢 EVALUAR EN PRIMER LUGAR
+      if (errorMsg.contains("intentos") ||
+          errorMsg.contains("attempts") ||
+          errorMsg.contains("429")) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Row(
+              children: [
+                const Icon(
+                  Icons.gpp_bad_rounded,
+                  color: Colors.redAccent,
+                  size: 28,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  "Acceso Bloqueado",
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF1E293B),
+            content: Text(
+              e.toString().replaceAll('Exception: ', ''),
+              style: GoogleFonts.montserrat(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.5,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(
+                  "ENTENDIDO",
+                  style: GoogleFonts.montserrat(
+                    color: AppColors.primaryGreen,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      } else {
+        _showSnack(e.toString().replaceAll('Exception: ', ''), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

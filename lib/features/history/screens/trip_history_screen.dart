@@ -18,7 +18,8 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
   final HistoryRepositoryImpl _repository = HistoryRepositoryImpl();
   bool _isLoading = true;
   List<Trip> _trips = [];
-
+  bool _isAscending = false; // Control de ordenamiento
+  String _selectedFilter = 'Todos'; // 🟢 Control de filtro dinámico
   final Color darkBg = const Color(0xFF0B0F19);
   final Color cardColor = const Color(0xFF161B2E);
 
@@ -31,6 +32,18 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
   Future<void> _loadHistory() async {
     setState(() => _isLoading = true);
     final trips = await _repository.getTripHistory();
+
+    // 🟢 Sorteo inteligente: Convertimos a local antes de comparar para evitar fallos de desfase
+    trips.sort((a, b) {
+      try {
+        DateTime dateA = a.date.toLocal();
+        DateTime dateB = b.date.toLocal();
+        return _isAscending ? dateA.compareTo(dateB) : dateB.compareTo(dateA);
+      } catch (e) {
+        return 0;
+      }
+    });
+
     setState(() {
       _trips = trips;
       _isLoading = false;
@@ -44,7 +57,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Cabecera premium consistente
+            // Cabecera premium consistente (AppBar con botón de ordenación)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
@@ -62,17 +75,43 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
                     ),
                   ),
                   const SizedBox(width: 15),
-                  Text(
-                    "HISTORIAL DE VIAJES",
-                    style: GoogleFonts.montserrat(
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 1.5,
+                  Expanded(
+                    child: Text(
+                      "HISTORIAL DE VIAJES",
+                      style: GoogleFonts.montserrat(
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _isAscending = !_isAscending;
+                      });
+                      _loadHistory();
+                    },
+                    icon: Icon(
+                      _isAscending
+                          ? Icons.swap_vert_rounded
+                          : Icons.swap_vert_rounded,
+                      color: _isAscending
+                          ? AppColors.primaryGreen
+                          : Colors.white,
+                      size: 20,
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                      padding: const EdgeInsets.all(12),
                     ),
                   ),
                 ],
               ),
             ),
+
+            // 🟢 INYECCIÓN: Barra de Filtros dinámica estilo conductor
+            _buildFilterBar(),
 
             // Cuerpo
             Expanded(
@@ -85,18 +124,23 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
                   : RefreshIndicator(
                       onRefresh: _loadHistory,
                       color: AppColors.primaryGreen,
-                      child: _trips.isEmpty
+                      child:
+                          _applyFilter(_trips)
+                              .isEmpty // 🟢 Aplicamos el filtro en caliente
                           ? _buildEmptyState()
                           : ListView.separated(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 24,
                                 vertical: 10,
                               ),
-                              itemCount: _trips.length,
+                              itemCount: _applyFilter(
+                                _trips,
+                              ).length, // 🟢 Conteo filtrado
                               separatorBuilder: (context, index) =>
                                   const SizedBox(height: 16),
-                              itemBuilder: (context, index) =>
-                                  _buildTripCard(_trips[index]),
+                              itemBuilder: (context, index) => _buildTripCard(
+                                _applyFilter(_trips)[index],
+                              ), // 🟢 Renderizado filtrado
                             ),
                     ),
             ),
@@ -106,12 +150,117 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
     );
   }
 
+  // 🟢 Genera la barra de pestañas filtrables para el conductor (Sin programados)
+  Widget _buildFilterBar() {
+    final filters = [
+      'Todos',
+      'Finalizados',
+      'Cancelados',
+    ]; // 🟢 Removido 'Programados'
+    return Container(
+      height: 46,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        scrollDirection: Axis.horizontal,
+        itemCount: filters.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final isSelected = _selectedFilter == filter;
+
+          return GestureDetector(
+            onTap: () {
+              setState(() => _selectedFilter = filter);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.primaryGreen : cardColor,
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: isSelected ? Colors.transparent : Colors.white10,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          // ignore: deprecated_member_use
+                          color: AppColors.primaryGreen.withOpacity(0.25),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Center(
+                child: Text(
+                  filter,
+                  style: GoogleFonts.montserrat(
+                    fontSize: 12,
+                    color: isSelected ? Colors.white : Colors.grey[400],
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // 🟢 Clasifica los viajes de forma segura según su estado de base de datos (Sin programados)
+  List<Trip> _applyFilter(List<Trip> list) {
+    if (_selectedFilter == 'Finalizados') {
+      return list.where((t) {
+        final statusStr = t.status.toString().toUpperCase();
+        return statusStr == 'COMPLETED';
+      }).toList();
+    }
+    if (_selectedFilter == 'Cancelados') {
+      return list.where((t) {
+        final statusStr = t.status.toString().toUpperCase();
+        return statusStr == 'CANCELLED';
+      }).toList();
+    }
+    return list;
+  }
+
   Widget _buildTripCard(Trip trip) {
     final currencyFormat = NumberFormat.currency(
       locale: 'es_CO',
       symbol: '\$',
       decimalDigits: 0,
     );
+
+    // 🟢 1. CONVERSIÓN CRÍTICA DE FECHA AL HUSO HORARIO LOCAL
+    final DateTime localDate = trip.date.toLocal();
+
+    // 🟢 2. DETECCIÓN DINÁMICA DE ESTADOS REALES DEL VIAJE
+    final bool isCompleted = trip.status == TripStatus.COMPLETED;
+    final bool isCancelled = trip.status == TripStatus.CANCELLED;
+    final bool isUpcoming =
+        trip.status == TripStatus.PENDING ||
+        trip.status == TripStatus.SCHEDULED_ASSIGNED;
+
+    Color statusColor = AppColors.primaryGreen;
+    String statusLabel = "COMPLETADO";
+    IconData statusIcon = Icons.check_circle_rounded;
+
+    if (isCancelled) {
+      statusColor = Colors.redAccent;
+      statusLabel = "CANCELADO";
+      statusIcon = Icons.cancel_rounded;
+    } else if (isUpcoming) {
+      statusColor = Colors.orangeAccent;
+      statusLabel = "PROGRAMADO";
+      statusIcon = Icons.event_available_rounded;
+    } else if (!isCompleted) {
+      statusColor = Colors.blueAccent;
+      statusLabel = "EN CURSO";
+      statusIcon = Icons.navigation_rounded;
+    }
 
     return Container(
       decoration: BoxDecoration(
@@ -127,56 +276,65 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
         ],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Sección Cabecera de Tarjeta
+          // 🟢 3. CABECERA RESPONSIVA (Soporta nombres de fecha largos sin desbordar)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.calendar_today_rounded,
-                      size: 11,
-                      color: Colors.white30,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      DateFormat(
-                        'EEE, d MMM • hh:mm a',
-                        'es',
-                      ).format(trip.date).toUpperCase(),
-                      style: GoogleFonts.montserrat(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white54,
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.calendar_today_rounded,
+                        size: 11,
+                        color: Colors.white30,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            DateFormat(
+                              'EEE, d MMM • hh:mm a',
+                              'es',
+                            ).format(localDate).toUpperCase(),
+                            style: GoogleFonts.montserrat(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 12),
+                // Insignia de Estado dinámica
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
                     vertical: 5,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.primaryGreen.withValues(alpha: 0.1),
+                    color: statusColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
-                        Icons.check_circle_rounded,
-                        size: 10,
-                        color: AppColors.primaryGreen,
-                      ),
+                      Icon(statusIcon, size: 10, color: statusColor),
                       const SizedBox(width: 4),
                       Text(
-                        "COMPLETADO",
+                        statusLabel,
                         style: GoogleFonts.montserrat(
                           fontSize: 9,
-                          color: AppColors.primaryGreen,
+                          color: statusColor,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.5,
                         ),
@@ -215,35 +373,84 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
 
           const Divider(height: 1, color: Colors.white10),
 
-          // Ganancia Total de Tarjeta
+          // 🟢 4. DESGLOSE FINANCIERO RESPONSIVO (Uso de FittedBox para autoescalar cifras monetarias)
           Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      "GANANCIA NETO",
-                      style: GoogleFonts.montserrat(
-                        fontSize: 8,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white30,
-                        letterSpacing: 1.2,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        isCancelled ? "PENALIZACIÓN" : "GANANCIA NETA",
+                        style: GoogleFonts.montserrat(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white30,
+                          letterSpacing: 1.2,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      currencyFormat.format(trip.price),
-                      style: GoogleFonts.montserrat(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.primaryGreen,
+                      const SizedBox(height: 4),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          currencyFormat.format(
+                            trip.driverRevenue,
+                          ), // Mapeo de ganancia neta real corregida
+                          style: GoogleFonts.montserrat(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: isCancelled
+                                ? Colors.redAccent
+                                : AppColors.primaryGreen,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+                if (!isCancelled) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "VALOR RECIBIDO",
+                          style: GoogleFonts.montserrat(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white30,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                            trip.price <= 0.0
+                                ? "Por confirmar"
+                                : currencyFormat.format(
+                                    trip.passengerCashToPay,
+                                  ), // 🟢 Muestra el efectivo neto real recibido
+                            style: GoogleFonts.montserrat(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: trip.price <= 0.0
+                                  ? AppColors.primaryGreen
+                                  : Colors.white70,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

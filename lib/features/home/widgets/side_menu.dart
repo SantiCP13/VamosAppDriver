@@ -16,6 +16,8 @@ import '../../profile/screens/profile_screen.dart';
 import '../../auth/screens/welcome_screen.dart';
 import '../../home/screens/support_screen.dart';
 import '../../../core/models/user_model.dart';
+import 'package:cached_network_image/cached_network_image.dart'; // 🟢 INSTALAR PROVEEDOR DE CACHÉ
+import 'package:package_info_plus/package_info_plus.dart'; // 🟢 NUEVA IMPORTACIÓN
 
 class SideMenu extends StatefulWidget {
   const SideMenu({super.key});
@@ -25,15 +27,31 @@ class SideMenu extends StatefulWidget {
 }
 
 class _SideMenuState extends State<SideMenu> {
+  String _appVersion = "v0.0.0"; // 🟢 VARIABLE DINÁMICA DE VERSIÓN
+
   @override
   void initState() {
     super.initState();
+    _loadAppVersion(); // 🟢 CARGA INICIAL DE VERSIÓN
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         context.read<WalletProvider>().loadWalletData(force: true);
         context.read<HistoryProvider>().loadHistory(forceRefresh: true);
       }
     });
+  }
+
+  // 🟢 MÉTODO PARA LEER EL PUBSPEC DINÁMICAMENTE
+  Future<void> _loadAppVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _appVersion =
+              "Versión ${packageInfo.version} (${packageInfo.buildNumber})";
+        });
+      }
+    } catch (_) {}
   }
 
   Map<String, dynamic>? _getCompanyOrConvenio(
@@ -289,9 +307,15 @@ class _SideMenuState extends State<SideMenu> {
             child: CircleAvatar(
               radius: 42,
               backgroundColor: const Color(0xFF0B0F19),
+              // CAMBIO: Se sustituye NetworkImage por CachedNetworkImageProvider con log de prueba
               backgroundImage:
                   (user?.photoUrl != null && user!.photoUrl!.isNotEmpty)
-                  ? NetworkImage(user.photoUrl!)
+                  ? CachedNetworkImageProvider(
+                      user.photoUrl!,
+                      errorListener: (ex) => debugPrint(
+                        "⚠️ [SIDE MENU DRIVER] Falló carga de foto en caché: $ex",
+                      ),
+                    )
                   : null,
               child: (user?.photoUrl == null || user!.photoUrl!.isEmpty)
                   ? Text(
@@ -316,23 +340,61 @@ class _SideMenuState extends State<SideMenu> {
           ),
           const SizedBox(height: 4),
 
-          Text(
-            tieneTurnoActivo
-                ? (homeProvider.selectedVehicle?.plate ??
-                      "Vehículo no asignado")
-                : "Sin turno activo",
-            style: GoogleFonts.poppins(
-              fontSize: 12,
-              color: tieneTurnoActivo
-                  ? Colors.white54
-                  : Colors.redAccent.withValues(alpha: 0.8),
-              fontWeight: tieneTurnoActivo
-                  ? FontWeight.normal
-                  : FontWeight.bold,
+          // 🟢 MEJORA: Insignia de desconexión inmediata o renderizado de estado de turno/vehículo activo
+          if (homeProvider.isNetworkDisconnected) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.redAccent.withValues(alpha: 0.25),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_off_rounded,
+                    color: Colors.redAccent,
+                    size: 12,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    "SIN INTERNET",
+                    style: GoogleFonts.montserrat(
+                      color: Colors.redAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+          ] else ...[
+            // Si hay internet, mostramos la placa del vehículo asignada al turno
+            Text(
+              tieneTurnoActivo
+                  ? (homeProvider.selectedVehicle?.plate ??
+                        "Vehículo no asignado")
+                  : "Sin turno activo",
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: tieneTurnoActivo
+                    ? Colors.white54
+                    : Colors.redAccent.withValues(alpha: 0.8),
+                fontWeight: tieneTurnoActivo
+                    ? FontWeight.normal
+                    : FontWeight.bold,
+              ),
+            ),
+          ],
 
-          if (tieneTurnoActivo) _buildCompanyBadge(user, homeProvider),
+          if (tieneTurnoActivo && !homeProvider.isNetworkDisconnected)
+            _buildCompanyBadge(user, homeProvider),
 
           const SizedBox(height: 20),
           Container(
@@ -446,43 +508,62 @@ class _SideMenuState extends State<SideMenu> {
   Widget _buildLogoutSection(AuthProvider authProvider) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(25, 0, 25, 30),
-      child: InkWell(
-        onTap: () async {
-          await authProvider.logout();
-          if (!mounted) return;
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-            (r) => false,
-          );
-        },
-        borderRadius: BorderRadius.circular(15),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.red.withValues(alpha: 0.05),
+      child: Column(
+        // 🟢 Agregado Column para centrar el texto dinámico debajo
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: () async {
+              context.read<HomeProvider>().stopTracking();
+              await authProvider.logout();
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                (r) => false,
+              );
+            },
             borderRadius: BorderRadius.circular(15),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.logout_rounded,
-                color: Colors.redAccent,
-                size: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(15),
               ),
-              const SizedBox(width: 10),
-              Text(
-                "Cerrar Sesión",
-                style: GoogleFonts.montserrat(
-                  fontWeight: FontWeight.w700,
-                  color: Colors.redAccent,
-                  fontSize: 14,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.logout_rounded,
+                    color: Colors.redAccent,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    "Cerrar Sesión",
+                    style: GoogleFonts.montserrat(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.redAccent,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+
+          // 🟢 COPIA Y PEGA ESTE TEXTO DINÁMICO AQUÍ ABAJO:
+          const SizedBox(height: 16),
+          Text(
+            _appVersion,
+            style: GoogleFonts.montserrat(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              color: Colors.white24, // Color discreto adaptado al fondo oscuro
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
       ),
     );
   }

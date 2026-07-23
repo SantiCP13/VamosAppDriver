@@ -12,13 +12,18 @@ class TripService {
   TripService(this._routeService);
 
   /// Obtiene la Polyline real entre dos puntos
-  Future<List<LatLng>> getRoutePolyline(LatLng start, LatLng end) async {
+  /// Obtiene la Polyline real entre dos puntos considerando paradas
+  Future<List<LatLng>> getRoutePolyline(
+    LatLng start,
+    LatLng end, {
+    List<Map<String, dynamic>>? paradas, // 🟢 Parámetro opcional añadido
+  }) async {
     try {
-      // 1. Llamamos al servicio de rutas (puedes usar el mismo RouteService que creamos para el usuario)
-      final result = await _routeService.getRoute(start, end);
+      // 1. Llamamos al servicio de rutas pasándole las paradas
+      final result = await _routeService.getRoute(start, end, paradas: paradas);
       return result.points;
     } catch (e) {
-      return [start, end]; // Fallback
+      return [start, end]; // Fallback en línea recta si falla la red
     }
   }
 

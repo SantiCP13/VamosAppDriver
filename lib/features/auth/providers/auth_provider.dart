@@ -5,6 +5,7 @@ import '../../../core/models/user_model.dart';
 import '../services/driver_auth_service.dart';
 import '../../../core/di/injection_container.dart';
 import '../../../core/services/storage_service.dart';
+import '../../home/providers/home_provider.dart';
 
 class AuthProvider extends ChangeNotifier {
   final DriverAuthService _authService = DriverAuthService();
@@ -58,6 +59,14 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // 🟢 FALLBACK DE SEGURIDAD: Asegurar que el GPS se detenga físicamente a través de GetIt
+    // en caso de cierres de sesión forzados por el servidor o tokens expirados.
+    try {
+      sl<HomeProvider>().stopTracking();
+    } catch (e) {
+      debugPrint("Error deteniendo GPS en logout fallback: $e");
+    }
+
     await _authService.logout();
     notifyListeners();
   }
